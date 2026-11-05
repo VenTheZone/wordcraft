@@ -298,6 +298,40 @@ pub struct Page {
     pub float_tables: Vec<Path>,
 }
 
+impl Page {
+    /// Fingerprint of the page's laid-out content, for caching its raster. A layout never changes
+    /// once made, and a paragraph an edit didn't touch keeps its `Arc` across layouts, so a page
+    /// the edit didn't reach keeps its key. Front ends add the view and the raster scale.
+    pub fn content_key(&self) -> u64 {
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        (self.w.to_bits(), self.h.to_bits()).hash(&mut h);
+        for list in [&self.items, &self.header, &self.footer] {
+            list.len().hash(&mut h);
+            for it in list.iter() {
+                match it {
+                    Placed::Lines { para, l0, l1, x, y, turn, .. } => {
+                        (Arc::as_ptr(para) as usize, l0, l1, x.to_bits(), y.to_bits(), turn).hash(&mut h);
+                    }
+                    Placed::Fill { rect, color } => format!("{rect:?}{color:?}").hash(&mut h),
+                    Placed::Rule { x0, y0, x1, y1, border } => format!("{x0}{y0}{x1}{y1}{border:?}").hash(&mut h),
+                    Placed::Image { rect, media, crop, spin, fx, .. } => format!("{rect:?}{media}{crop:?}{spin:?}{fx:?}").hash(&mut h),
+                    Placed::Shape { rect, kind, fill, stroke, stroke_width, effects, freeform, spin, extra, .. } => {
+                        format!("{rect:?}{kind:?}{fill:?}{stroke:?}{stroke_width}{effects:?}{spin:?}{extra:?}").hash(&mut h);
+                        freeform.as_ref().map(|f| Arc::as_ptr(f) as usize).hash(&mut h);
+                    }
+                    Placed::Graphic { rect, graphic, spin, .. } => {
+                        (Arc::as_ptr(graphic) as usize, rect.x.to_bits(), rect.y.to_bits(), rect.w.to_bits(), rect.h.to_bits()).hash(&mut h);
+                        format!("{spin:?}").hash(&mut h)
+                    }
+                    Placed::Clip { rect, spin, items } => format!("{rect:?}{spin:?}{items:?}").hash(&mut h),
+                    Placed::Cell { .. } | Placed::Object { .. } => {}
+                }
+            }
+        }
+        h.finish()
+    }
+}
+
 /// The whole layout.
 #[derive(Clone, Debug, Default)]
 pub struct DocLayout {

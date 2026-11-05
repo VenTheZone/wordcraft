@@ -1,54 +1,9 @@
 use super::{DocLayout, Hash, Hasher, Page, Placed, Pos, Pos2, Rect, StoryRef, WordApp, json, pos2};
 
-/// Fingerprint of everything outside the layout that changes how pages render: the view's
-/// marks and markup, dark mode, the page colour and watermark, header/body dimming, the media,
-/// and (while a drag lasts) the object left out of the page.
+/// The view's part of a page's cache key (see [`wordcraft_engine::Session::page_view_key`]).
 /// Taken once per frame.
 pub(super) fn view_key(app: &WordApp, dim_body: bool, hidden: Option<&Pos>) -> u64 {
-    let mut h = std::collections::hash_map::DefaultHasher::new();
-    let v = &app.session.view;
-    (v.marks, app.session.prefs.marks, v.show_markup, v.dark_mode, wordcraft_render::DARK_PAPER, v.hide_ink, v.draw.replay).hash(&mut h);
-    (v.read_mode, v.read_page_color).hash(&mut h);
-    app.session.prefs.markup.hash(&mut h);
-    dim_body.hash(&mut h);
-    format!("{:?}{:?}{:?}", app.session.doc.settings.page_color, app.session.doc.settings.page_picture, app.session.doc.settings.watermark)
-        .hash(&mut h);
-    app.session.doc.media.len().hash(&mut h);
-    // A page drawn without a dragged object must not pass for the page with it: the drag starts
-    // and ends change the key once each, so the page is rendered again then and only then.
-    hidden.hash(&mut h);
-    h.finish()
-}
-
-/// Fingerprint of a page's laid-out content. A layout never changes once made, so this is
-/// taken once per page and layout ([`PageKeys`]), not every frame.
-pub(super) fn page_content_key(page: &Page) -> u64 {
-    let mut h = std::collections::hash_map::DefaultHasher::new();
-    (page.w.to_bits(), page.h.to_bits()).hash(&mut h);
-    for list in [&page.items, &page.header, &page.footer] {
-        list.len().hash(&mut h);
-        for it in list.iter() {
-            match it {
-                Placed::Lines { para, l0, l1, x, y, turn, .. } => {
-                    (std::sync::Arc::as_ptr(para) as usize, l0, l1, x.to_bits(), y.to_bits(), turn).hash(&mut h);
-                }
-                Placed::Fill { rect, color } => format!("{rect:?}{color:?}").hash(&mut h),
-                Placed::Rule { x0, y0, x1, y1, border } => format!("{x0}{y0}{x1}{y1}{border:?}").hash(&mut h),
-                Placed::Image { rect, media, crop, spin, fx, .. } => format!("{rect:?}{media}{crop:?}{spin:?}{fx:?}").hash(&mut h),
-                Placed::Shape { rect, kind, fill, stroke, stroke_width, effects, freeform, spin, extra, .. } => {
-                    format!("{rect:?}{kind:?}{fill:?}{stroke:?}{stroke_width}{effects:?}{spin:?}{extra:?}").hash(&mut h);
-                    freeform.as_ref().map(|f| std::sync::Arc::as_ptr(f) as usize).hash(&mut h);
-                }
-                Placed::Graphic { rect, graphic, spin, .. } => {
-                    (std::sync::Arc::as_ptr(graphic) as usize, rect.x.to_bits(), rect.y.to_bits(), rect.w.to_bits(), rect.h.to_bits()).hash(&mut h);
-                    format!("{spin:?}").hash(&mut h)
-                }
-                Placed::Clip { rect, spin, items } => format!("{rect:?}{spin:?}{items:?}").hash(&mut h),
-                Placed::Cell { .. } | Placed::Object { .. } => {}
-            }
-        }
-    }
-    h.finish()
+    app.session.page_view_key(dim_body, hidden)
 }
 
 /// The content fingerprints of one layout's pages, taken when a page is first needed (#811).
@@ -73,7 +28,7 @@ impl PageKeys {
         if let Some(Some(k)) = self.keys.get(i) {
             return *k;
         }
-        let k = layout.pages.get(i).map_or(0, page_content_key);
+        let k = layout.pages.get(i).map_or(0, Page::content_key);
         if let Some(slot) = self.keys.get_mut(i) {
             *slot = Some(k);
             self.hashed += 1;
@@ -227,32 +182,12 @@ pub(crate) fn preview_sel(app: &WordApp) -> Option<&wordcraft_engine::Selection>
 /// Whether the pages are drawn dark: View › Switch Modes, or in Read Mode the Page color's
 /// Inverse (Switch Modes is ignored there). Drawing over the pages (ink, drag previews) follows it.
 pub(crate) fn dark_page(app: &WordApp) -> bool {
-    use wordcraft_engine::cmd::view::ReadPageColor;
-    let v = &app.session.view;
-    if v.read_mode { v.read_page_color == ReadPageColor::Inverse } else { v.dark_mode }
+    app.session.dark_page()
 }
 
 /// Render options for this view's page rasters: marks, markup, dark page, header/body dimming.
 pub(super) fn page_render_options(app: &WordApp, dim_body: bool) -> wordcraft_render::RenderOptions {
-    let mut opts = screen_render_options();
-    opts.display.marks = app.session.view.marks;
-    opts.display.always = app.session.prefs.marks;
-    opts.display.placeholders = true;
-    opts.display.markup = app.session.view.show_markup;
-    // Ink Replay draws the ink itself, stroke by stroke, over pages without it.
-    opts.display.hide_ink = app.session.view.hide_ink || app.session.view.draw.replay;
-    opts.display.revisions = app.session.prefs.markup.clone();
-    opts.dark = dark_page(app);
-    opts.dark_paper = wordcraft_render::DARK_PAPER;
-    // In Read Mode the Page color sets the paper.
-    if app.session.view.read_mode {
-        use wordcraft_engine::cmd::view::ReadPageColor;
-        let color = app.session.view.read_page_color;
-        opts.read_paper = Some(if color == ReadPageColor::Sepia { wordcraft_render::SEPIA_PAPER } else { wordcraft_doc::props::Rgb::WHITE });
-    }
-    opts.display.dim_header = !dim_body;
-    opts.display.dim_body = dim_body;
-    opts
+    wordcraft_render::RenderOptions { text_darkening: cfg!(target_os = "macos"), ..app.session.page_render_options(dim_body) }
 }
 
 /// Render options for page rasters shown on screen: on macOS, text is darkened the way the system

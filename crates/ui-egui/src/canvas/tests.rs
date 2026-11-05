@@ -4963,7 +4963,7 @@ fn a_pictures_corrections_and_crop_change_its_page_key() {
         let layout = s.layout();
         let items: Vec<Placed> = layout.pages[0].items.iter().filter(|i| matches!(i, Placed::Image { .. })).cloned().collect();
         assert_eq!(items.len(), 1, "the picture is an item of its page");
-        pages::page_content_key(&Page { items, ..Default::default() })
+        Page { items, ..Default::default() }.content_key()
     };
     let faded = key(&mut s);
     s.run("select.range", &json!({"anchor": {"block": 0, "off": 0}, "focus": {"block": 0, "off": 3}})).unwrap();
@@ -4984,7 +4984,7 @@ fn a_pictures_corrections_and_crop_change_its_page_key() {
         }],
         ..Default::default()
     };
-    let plain = pages::page_content_key(&at([0.0; 4], PicFx::default()));
-    assert_ne!(plain, pages::page_content_key(&at([0.1, 0.0, 0.0, 0.0], PicFx::default())), "crop");
-    assert_ne!(plain, pages::page_content_key(&at([0.0; 4], PicFx::new(10_000, 0, 0))), "brightness");
+    let plain = at([0.0; 4], PicFx::default()).content_key();
+    assert_ne!(plain, at([0.1, 0.0, 0.0, 0.0], PicFx::default()).content_key(), "crop");
+    assert_ne!(plain, at([0.0; 4], PicFx::new(10_000, 0, 0)).content_key(), "brightness");
 }
