@@ -72,6 +72,9 @@ pub struct Session {
     /// HTML for the system clipboard beside [`Self::clipboard_text`]: the copy's formatting for
     /// programs that read HTML, equations as MathML (#816); empty when nothing was copied.
     pub clipboard_html: String,
+    /// Counts the copies and cuts, so a host can tell a new copy from an old one even when the
+    /// text is the same. Not document state: undo leaves it alone.
+    pub clipboard_rev: u64,
     /// Items collected by Copy and Cut this session, for the Clipboard pane.
     pub clip_history: crate::cmd::edit::ClipHistory,
     pub find: FindState,

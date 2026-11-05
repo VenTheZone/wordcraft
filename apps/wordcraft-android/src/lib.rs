@@ -20,8 +20,8 @@ const KEEPS_EVERYTHING: [&str; 10] = ["docx", "docm", "dotx", "dotm", "odt", "ot
 
 struct App {
     session: Session,
-    /// Clipboard text last handed to Android, so a copy is reported once.
-    clip_sent: String,
+    /// `Session::clipboard_rev` last handed to Android, so a copy is reported once.
+    clip_sent: u64,
 }
 
 static APP: Mutex<Option<App>> = Mutex::new(None);
@@ -82,7 +82,7 @@ fn init(slot: &mut Option<App>, p: &Value) -> Result<Value, String> {
                 session.status = format!("Recovery is off: {e}");
             }
         }
-        *slot = Some(App { session, clip_sent: String::new() });
+        *slot = Some(App { session, clip_sent: 0 });
     }
     let app = slot.as_mut().ok_or("init failed")?;
     Ok(json!({"view": view(app), "recovered": recovery_list(&app.session)}))
@@ -120,8 +120,8 @@ fn run_id(app: &mut App, id: &str, params: &Value, ime: bool) -> Value {
 /// the system clipboard when there is a new one.
 fn edit_reply(app: &mut App, result: Result<Value, String>) -> Value {
     let requests = std::mem::take(&mut app.session.ui_requests);
-    let clipboard = (app.session.clipboard_text != app.clip_sent).then(|| {
-        app.clip_sent = app.session.clipboard_text.clone();
+    let clipboard = (app.session.clipboard_rev != app.clip_sent).then(|| {
+        app.clip_sent = app.session.clipboard_rev;
         json!({"text": app.session.clipboard_text, "html": app.session.clipboard_html})
     });
     let (result, error) = match result {
@@ -339,6 +339,12 @@ mod tests {
         // Copy reports the clipboard once.
         let c = ok("run", json!({"id": "edit.copy"}));
         assert_eq!(c["clipboard"]["text"].as_str().unwrap().trim_end(), "Hello tablet");
+        assert_eq!(ok("run", json!({"id": "caret.docEnd"}))["clipboard"], Value::Null);
+
+        // Copying the same text again is a new copy: Android may hold something else by now.
+        ok("run", json!({"id": "select.all"}));
+        let again = ok("run", json!({"id": "edit.copy"}));
+        assert_eq!(again["clipboard"]["text"], c["clipboard"]["text"]);
         assert_eq!(ok("run", json!({"id": "caret.docEnd"}))["clipboard"], Value::Null);
 
         // The input method deletes "tablet" before the caret.

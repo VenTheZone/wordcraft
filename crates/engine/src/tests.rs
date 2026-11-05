@@ -1221,6 +1221,10 @@ fn copying_an_equation_puts_mathml_on_the_clipboard() {
     assert!(html.contains("<msub><mrow><mi>x</mi></mrow><mrow><mi>s</mi></mrow></msub>"), "{html}");
     assert!(html.contains("Speed"), "{html}");
     assert_eq!(s.clipboard_html, html);
+    // Each copy counts, even a repeat of the same text.
+    assert_eq!(s.clipboard_rev, 1);
+    run(&mut s, "edit.copy", json!({}));
+    assert_eq!(s.clipboard_rev, 2);
     assert!(r["text"].as_str().unwrap_or_default().contains("y=2x_s"));
     let clip = r["text"].as_str().unwrap_or_default().to_string();
 
@@ -1345,6 +1349,10 @@ fn copying_bold_text_puts_html_on_the_clipboard() {
     let html = r["html"].as_str().unwrap_or_default().to_string();
     assert!(html.contains("<strong>bold</strong>"), "{html}");
     assert_eq!(s.clipboard_html, html);
+    // Each copy counts, even a repeat of the same text.
+    assert_eq!(s.clipboard_rev, 1);
+    run(&mut s, "edit.copy", json!({}));
+    assert_eq!(s.clipboard_rev, 2);
 }
 
 #[test]

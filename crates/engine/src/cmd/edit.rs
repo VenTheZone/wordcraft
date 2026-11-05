@@ -202,6 +202,7 @@ fn copy_with(s: &mut Session, whole: Option<&Path>) -> CmdResult {
 /// #816) for the host to put on the system clipboard too, so other programs keep the formatting;
 /// and for a copy of one equation alone, its MathML (#1297).
 pub(crate) fn copy_result(s: &mut Session) -> Value {
+    s.clipboard_rev = s.clipboard_rev.saturating_add(1);
     s.clipboard_html = match &s.clipboard {
         Some(f) => wordcraft_formats::html::export_fragment(&f.to_document()),
         None => String::new(),
