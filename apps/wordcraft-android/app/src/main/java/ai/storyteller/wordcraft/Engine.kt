@@ -40,7 +40,8 @@ sealed interface EngineEvent {
  * never touched from two threads. Failures become [EngineEvent.Error], never exceptions.
  */
 class Engine {
-    private val dispatcher = Executors.newSingleThreadExecutor { Thread(it, "wordcraft-engine") }.asCoroutineDispatcher()
+    // 16 MB stack: Rust layout, import and render recurse deeply, and a stack overflow is a SIGSEGV no catch stops.
+    private val dispatcher = Executors.newSingleThreadExecutor { Thread(null, it, "wordcraft-engine", 16L shl 20) }.asCoroutineDispatcher()
     private val scope = CoroutineScope(SupervisorJob() + dispatcher)
     private val _view = MutableStateFlow<ViewState?>(null)
     val view: StateFlow<ViewState?> = _view
