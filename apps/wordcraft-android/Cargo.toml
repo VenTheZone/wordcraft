@@ -1,0 +1,33 @@
+[package]
+name = "wordcraft-android"
+description = "WordCraft on Android: the JNI bridge the Kotlin app in this folder loads"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lib]
+# cdylib: the .so the app loads; rlib: so host tests, clippy and doctests treat it as usual.
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+wordcraft-engine = { workspace = true }
+wordcraft-doc = { workspace = true }
+serde_json = { workspace = true }
+# Already in Cargo.lock through rustls-platform-verifier.
+jni = "0.22"
+
+# Not `[lints] workspace = true`: the workspace forbids unsafe code, and JNI needs exported
+# function names (`#[unsafe(no_mangle)]` in src/exports.rs), which that lint counts as unsafe.
+# Everything else matches [workspace.lints].
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+cognitive_complexity = "deny"
+wildcard_imports = "deny"
+dbg_macro = "warn"
+todo = "warn"
+too_many_arguments = "deny"
+type_complexity = "allow"

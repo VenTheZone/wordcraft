@@ -6819,6 +6819,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "wordcraft-android"
+version = "0.15.1"
+dependencies = [
+ "jni",
+ "serde_json",
+ "wordcraft-doc",
+ "wordcraft-engine",
+]
+
+[[package]]
 name = "wordcraft-cli"
 version = "0.15.1"
 dependencies = [

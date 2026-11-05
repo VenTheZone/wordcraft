@@ -8,3 +8,12 @@ plan/
 /.claude/
 /target-*/
 /craft-fonts/
+
+# Android app (apps/wordcraft-android): Gradle output, the SDK path, the cargo-ndk .so files, keys
+/apps/wordcraft-android/.gradle/
+/apps/wordcraft-android/build/
+/apps/wordcraft-android/app/build/
+/apps/wordcraft-android/local.properties
+/apps/wordcraft-android/app/src/main/jniLibs/
+*.jks
+*.keystore
