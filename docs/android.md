@@ -1,6 +1,6 @@
 # WordCraft on Android
 
-> **Last reviewed:** 2026-11-07 · **Last updated:** 2026-11-07 · **Change:** major (first committed version: the tablet app, its build, signing and install steps, and what it lacks)
+> **Last reviewed:** 2026-11-07 · **Last updated:** 2026-11-07 · **Change:** minor (final review fixes: edge-to-edge and keyboard insets, how Open and the app requests work, what is and isn't drawn)
 
 WordCraft for Android tablets is a native Kotlin and Jetpack Compose app over the same Rust engine
 as the desktop and web builds. The engine runs in-process through a small JNI bridge, so a command
@@ -12,7 +12,11 @@ tablet. Code is in [`apps/wordcraft-android`](../apps/wordcraft-android): the br
 ## What it does today
 
 - Pages drawn by the engine's own renderer, with pinch zoom.
-- Tap, double-tap and long-press selection; a caret and selection handles.
+- Tap, double-tap and long-press selection; a caret and the selection highlight (no drag
+  handles).
+- Edge-to-edge on every Android version (Android 15 forces it): the window draws under the system
+  bars and the app pads for the status and navigation bars, the display cutout and the keyboard,
+  so the page area ends above the soft keyboard and the caret scrolls into view above it.
 - The soft keyboard with composition and Gboard suggestions kept in the document, hardware keys
   and Ctrl shortcuts, and the system clipboard.
 - A ribbon: a hand-made Home tab, the catalog tabs Insert to View with their commands that need no
@@ -136,10 +140,19 @@ and `.html` files from other apps.
   selection, format state, the text around the caret for the input method), `commands` (the
   catalog for the ribbon and command search), `shortcut` (a key chord through the keymap), `paste`,
   `ime.deleteSurrounding`, `markSaved` and `recovery.tick` / `recovery.list`.
-- **Files.** Android hands the app a stream, not a path, so open sends the bytes with the command
-  and save and export ask Kotlin to write through the file picker (`file.save`, `file.saveAs` and
-  `file.exportPdf` come back as requests). The revision is checked on save so an edit made while
-  the picker was open isn't marked saved.
+- **Files.** Android hands the app a stream, not a path. Open streams the file into the app's
+  cache folder (at most 200 MB, never held on the Java heap) and runs `file.open` with that path;
+  no file bytes travel in the command. Save and export ask Kotlin to write through the file
+  picker. The revision is checked on save so an edit made while the picker was open isn't marked
+  saved. A save holds the file's bytes on the Java heap once (an out-of-memory is reported and
+  the document stays open and unsaved). The file a document belongs to is kept in the
+  `Application`, so it survives the activity being recreated. A file another app opened
+  read-only can't be saved over: the app says so and runs Save As.
+- **Requests.** Some commands need the app, not the engine. The bridge answers them with a
+  request and Kotlin acts on it: `new` (`file.new`), `save`, `saveAs`, `exportPdf` and `openFile`
+  run the matching File flow (each after the unsaved-changes guard where it replaces the
+  document), `close` closes the document. `scrollTo` and `focus` are ignored. Anything else that
+  asks for a dialog shows a "... isn't on the tablet yet" message.
 - **Hostile input.** Parameters from Kotlin are treated like any untrusted input: bad JSON,
   junk numbers and path-like names return errors. `src/lib.rs` has a test that throws junk at
   every method.
@@ -156,4 +169,5 @@ open the sample, type, save, and watch `adb logcat` for `UnsatisfiedLinkError` a
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-07 | minor | Final review fixes: edge-to-edge handling, how Open and the app requests work, no selection handles, Mailings left out of the ribbon, no backup of app data |
 | 2026-11-07 | major | First committed version: what the tablet app does and lacks, the toolchain, the release signing setup, install and the emulator check |

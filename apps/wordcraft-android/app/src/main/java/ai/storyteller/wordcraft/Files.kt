@@ -92,24 +92,32 @@ fun copyStream(input: InputStream, file: File, max: Long): Result<Unit> = try {
     Result.failure(e)
 }
 
+/** The output stream for a file couldn't be opened, so nothing was written: the app only has read access, or the provider refuses overwriting. */
+class CantOverwrite(cause: Throwable) : IOException(cause.message ?: "The location can't be written", cause)
+
 /**
- * Replace what [uri] holds with [bytes]. Mode "wt" truncates; a provider that refuses it is
- * reported rather than retried with "w", which some providers don't truncate (a corrupt file).
+ * Replace what [uri] holds with [bytes] from [offset] on (the engine's status byte stays out of the
+ * file without a copy). Mode "wt" truncates; a provider that refuses it is reported as
+ * [CantOverwrite] rather than retried with "w", which some providers don't truncate (a corrupt file).
  */
-fun writeUri(ctx: Context, uri: Uri, bytes: ByteArray): Result<Unit> = try {
-    val out = ctx.contentResolver.openOutputStream(uri, "wt") ?: throw IOException("The location can't be written")
-    out.use { it.write(bytes) }
+fun writeUri(ctx: Context, uri: Uri, bytes: ByteArray, offset: Int = 0): Result<Unit> = try {
+    val out = try {
+        ctx.contentResolver.openOutputStream(uri, "wt") ?: throw IOException("The location can't be written")
+    } catch (e: Exception) { throw CantOverwrite(e) }
+    out.use { it.write(bytes, offset, bytes.size - offset) }
     Result.success(Unit)
+} catch (e: CantOverwrite) {
+    Result.failure(e)
 } catch (e: Exception) {
     Result.failure(IOException(e.message ?: "The location can't be written", e))
 }
 
-/** Write [bytes] as `cacheDir/share/<name>` (that folder emptied first) for the share sheet. */
-fun writeShareFile(ctx: Context, name: String, bytes: ByteArray): Result<File> = try {
+/** Write [bytes] from [offset] on as `cacheDir/share/<name>` (that folder emptied first) for the share sheet. */
+fun writeShareFile(ctx: Context, name: String, bytes: ByteArray, offset: Int = 0): Result<File> = try {
     val dir = File(ctx.cacheDir, "share")
     dir.deleteRecursively()
     if (!dir.mkdirs() && !dir.isDirectory) throw IOException("The app's cache folder isn't writable")
-    Result.success(File(dir, cacheName(name)).also { it.writeBytes(bytes) })
+    Result.success(File(dir, cacheName(name)).also { f -> f.outputStream().use { it.write(bytes, offset, bytes.size - offset) } })
 } catch (e: Exception) { Result.failure(e) }
 
 data class RecentFile(val uri: String, val name: String)

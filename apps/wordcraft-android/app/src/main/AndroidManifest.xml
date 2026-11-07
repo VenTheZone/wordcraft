@@ -6,6 +6,7 @@
         android:roundIcon="@mipmap/ic_launcher_round"
         android:label="@string/app_name"
         android:theme="@android:style/Theme.Material.Light.NoActionBar"
+        android:allowBackup="false"
         android:supportsRtl="true">
         <activity
             android:name=".MainActivity"
@@ -21,7 +22,6 @@
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <data android:scheme="content" />
-                <data android:scheme="file" />
                 <data android:mimeType="application/vnd.openxmlformats-officedocument.wordprocessingml.document" />
                 <data android:mimeType="application/msword" />
                 <data android:mimeType="application/vnd.oasis.opendocument.text" />

@@ -115,16 +115,27 @@ class Engine {
         } catch (e: Throwable) { null }
     }
 
-    /** The bytes of a save and the document revision they were made at. */
-    class Saved(val bytes: ByteArray, val rev: Long)
+    /** What a save made, as the native call returned it: [START] bytes of status, then the file. [rev] is the document revision it was made at. */
+    class Saved(val bytes: ByteArray, val rev: Long) {
+        companion object { const val START = 1 }
+    }
 
-    /** The document as [name]'s format and its revision, read in one engine job; the app writes it, then calls [markSavedIf]. */
+    /**
+     * The document as [name]'s format and its revision, read in one engine job; the app writes it, then calls [markSavedIf].
+     * Any failure, an out-of-memory included, comes back as a failed result: the document stays open and dirty.
+     */
+    // ponytail: the whole file crosses the Java heap once (the native byte array, written from offset START with no copy).
+    // The ceiling is the heap; the upgrade is Rust writing a cache file that Kotlin streams to the target.
     suspend fun save(name: String): Result<Saved> = withContext(dispatcher) {
-        val out = try { Native.save(name) } catch (e: Throwable) { return@withContext Result.failure(e) }
-        when (out.firstOrNull()) {
-            0.toByte() -> Result.success(Saved(out.copyOfRange(1, out.size), callNow("view")?.optLong("rev", -1L) ?: -1L))
-            else -> Result.failure(IllegalStateException(if (out.size > 1) String(out, 1, out.size - 1) else "The document couldn't be saved"))
-        }
+        try {
+            val out = Native.save(name)
+            when (out.firstOrNull()) {
+                0.toByte() -> Result.success(Saved(out, callNow("view")?.optLong("rev", -1L) ?: -1L))
+                else -> Result.failure(IllegalStateException(if (out.size > 1) String(out, 1, out.size - 1) else "The document couldn't be saved"))
+            }
+        } catch (e: OutOfMemoryError) {
+            Result.failure(IllegalStateException("The device ran out of memory saving this document", e))
+        } catch (e: Throwable) { Result.failure(e) }
     }
 
     /** A number the engine sent, or NaN when missing or not a number; callers drop what isn't finite. */

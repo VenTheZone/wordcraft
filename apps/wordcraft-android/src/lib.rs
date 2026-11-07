@@ -22,12 +22,36 @@ struct App {
     session: Session,
     /// `Session::clipboard_rev` last handed to Android, so a copy is reported once.
     clip_sent: u64,
+    keys: PageKeys,
+}
+
+/// The content keys of one layout's pages. Hashing a page formats every border and fill, which
+/// costs tens of milliseconds on a long table, and `view` is asked for after every edit, caret
+/// move and recovery tick. A layout never changes once made (the session hands out the same one
+/// until an edit), so the keys are taken once per layout, as ui-egui's `PageKeys` does.
+#[derive(Default)]
+struct PageKeys {
+    /// The layout `keys` are for; held so its address can't be reused by another one.
+    layout: Option<std::sync::Arc<wordcraft_engine::layout::DocLayout>>,
+    keys: Vec<u64>,
+}
+
+impl PageKeys {
+    fn of(&mut self, layout: &std::sync::Arc<wordcraft_engine::layout::DocLayout>) -> &[u64] {
+        if !self.layout.as_ref().is_some_and(|l| std::sync::Arc::ptr_eq(l, layout)) {
+            self.keys = layout.pages.iter().map(wordcraft_engine::layout::Page::content_key).collect();
+            self.layout = Some(layout.clone());
+        }
+        &self.keys
+    }
 }
 
 static APP: Mutex<Option<App>> = Mutex::new(None);
 
-/// The session lock. A panic while it was held (caught by `exports`) poisons it; the session is
-/// still whole (`Session::run` restores the document on a panic), so carry on with it.
+/// The session lock. A panic while it was held poisons it; `exports`' `with_env` catches the
+/// panic and the session carries on. `Session::run` restores the document after a panic inside
+/// a command, but a panic in `view()` or layout is outside `run`: the session may be left
+/// mid-update there, though it is still usable.
 fn lock() -> MutexGuard<'static, Option<App>> {
     APP.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
 }
@@ -83,7 +107,7 @@ fn init(slot: &mut Option<App>, p: &Value) -> Result<Value, String> {
                 session.status = format!("Recovery is off: {e}");
             }
         }
-        *slot = Some(App { session, clip_sent: 0 });
+        *slot = Some(App { session, clip_sent: 0, keys: PageKeys::default() });
     }
     let app = slot.as_mut().ok_or("init failed")?;
     // `fresh`: this call made the session. A recreated activity finds the old one, whose documents are open and not to be offered again.
@@ -136,15 +160,17 @@ fn edit_reply(app: &mut App, result: Result<Value, String>) -> Value {
 }
 
 fn view(app: &mut App) -> Value {
-    let s = &mut app.session;
+    let App { session: s, keys, .. } = app;
     let layout = s.layout();
     let view_key = s.page_view_key(false, None);
+    let content = keys.of(&layout);
     let pages: Vec<Value> = layout
         .pages
         .iter()
-        .map(|pg| {
+        .zip(content)
+        .map(|(pg, content)| {
             let mut h = std::collections::hash_map::DefaultHasher::new();
-            (view_key, pg.content_key()).hash(&mut h);
+            (view_key, content).hash(&mut h);
             json!({"w": pg.w, "h": pg.h, "key": format!("{:016x}", h.finish())})
         })
         .collect();
@@ -366,6 +392,56 @@ mod tests {
         let o = ok("run", json!({"id": "file.open", "params": {"path": "Tablet.docx", "data": b64}}));
         assert_eq!(o["error"], Value::Null);
         assert!(o["view"]["ime"]["text"].as_str().unwrap().contains("Hello tablet"));
+    }
+
+    /// About a hundred pages of bordered tables, opened through `file.open` as HTML.
+    fn open_table_document() -> usize {
+        let mut html = String::from("<html><body>");
+        for t in 0..60 {
+            html.push_str(&format!("<h2>Table {t}</h2><table border=\"1\">"));
+            for r in 0..40 {
+                html.push_str(&format!("<tr><td>row {r}</td><td>alpha</td><td>beta</td><td>{t}</td></tr>"));
+            }
+            html.push_str("</table>");
+        }
+        html.push_str("</body></html>");
+        let data = wordcraft_engine::cmd::insert::base64_encode(html.as_bytes());
+        let o = ok("run", json!({"id": "file.open", "params": {"path": "tables.html", "data": data}}));
+        assert_eq!(o["error"], Value::Null);
+        o["view"]["pages"].as_array().map_or(0, Vec::len)
+    }
+
+    /// F6: one `view` reply on a long table document must stay cheap, since one follows every keystroke.
+    /// Run `cargo test --release -p wordcraft-android view_cost -- --nocapture` for the numbers.
+    #[test]
+    fn view_cost_on_a_long_table_document() {
+        let _g = TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        ok("init", json!({"reset": true, "locale": "en-US"}));
+        let pages = open_table_document();
+        assert!(pages >= 50, "{pages} pages");
+        ok("view", json!({}));
+        let n = 10;
+        let t = std::time::Instant::now();
+        for _ in 0..n {
+            ok("view", json!({}));
+        }
+        let each = t.elapsed().as_secs_f64() * 1000.0 / f64::from(n);
+        let typed = std::time::Instant::now();
+        for _ in 0..n {
+            ok("run", json!({"id": "text.insert", "params": {"text": "x"}}));
+        }
+        let each_typed = typed.elapsed().as_secs_f64() * 1000.0 / f64::from(n);
+        eprintln!("view_cost: {pages} pages, view {each:.2} ms, keystroke {each_typed:.2} ms");
+        // The cache must not hide an edit: the page typed on gets a new key, a view alone changes none.
+        let keys = |v: &Value| v["pages"].as_array().unwrap().iter().map(|p| p["key"].as_str().unwrap().to_owned()).collect::<Vec<_>>();
+        let before = keys(&ok("view", json!({})));
+        assert_eq!(before, keys(&ok("view", json!({}))));
+        ok("run", json!({"id": "caret.docStart"}));
+        let after = keys(&ok("run", json!({"id": "text.insert", "params": {"text": "changed"}}))["view"]);
+        assert_ne!(before.first(), after.first(), "the edited page keeps its key");
+        if !cfg!(debug_assertions) {
+            assert!(each < 5.0, "view takes {each:.2} ms");
+        }
     }
 
     #[test]

@@ -86,8 +86,8 @@ internal data class Cmd(val id: String, val label: String, val enabled: Boolean,
 /** One ribbon button the engine's Word feature catalog lists. */
 internal data class Entry(val tab: String, val group: String, val label: String, val id: String)
 
-/** The catalog tabs the ribbon shows after the hand-made Home, in order. The rest are File (the menu), contextual or keyboard-only. */
-internal val GENERATED_TABS = listOf("Insert", "Draw", "Design", "Layout", "References", "Mailings", "Review", "View")
+/** The catalog tabs the ribbon shows after the hand-made Home, in order. The rest are File (the menu), contextual or keyboard-only; Mailings is left out because merge and label commands can add a hidden second document and nothing there works without dialogs. */
+internal val GENERATED_TABS = listOf("Insert", "Draw", "Design", "Layout", "References", "Review", "View")
 
 /**
  * Tab, then group, then entries, for the tabs in [GENERATED_TABS] that have a button that runs with

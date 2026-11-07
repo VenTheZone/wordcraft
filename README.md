@@ -101,7 +101,8 @@ Every screenshot below is WordCraft itself, rendered offscreen by its own UI tes
 - **Fast.** Paragraph layout is cached, so typing in a 188-page document re-lays it out in about
   1.4 ms; pages render on demand.
 - **Everywhere.** One Rust codebase for macOS, Windows, Linux, BSD, Android tablets and the web. No Electron, no
-  Tauri: native [egui](https://github.com/emilk/egui) on the GPU.
+  Tauri: native [egui](https://github.com/emilk/egui) on the GPU on the desktop, and a Kotlin and Jetpack
+  Compose app over the same engine on Android.
 - **Built for agents.** Every action is a command with an id. The same 422 commands drive the
   ribbon, keyboard shortcuts, the command search, a command-line tool, a JSON control channel and
   an MCP server.

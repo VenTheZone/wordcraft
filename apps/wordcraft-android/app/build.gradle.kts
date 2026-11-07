@@ -58,6 +58,8 @@ val cargoBuild by tasks.registering(Exec::class) {
     args += listOf("build", "--release", "-p", "wordcraft-android")
     commandLine(args)
     environment("ANDROID_HOME", android.sdkDirectory.path)
+    // The NDK that ndkVersion pins, not whichever cargo-ndk finds first under ANDROID_HOME.
+    environment("ANDROID_NDK_HOME", android.ndkDirectory.path)
     environment("CARGO_TARGET_DIR", System.getenv("CARGO_TARGET_DIR") ?: repo.resolve("target-android").path)
     environment("CRAFT_PROOF_EMBED", System.getenv("CRAFT_PROOF_EMBED") ?: "en")
     // Not in 0.1: craft-fonts adds about 44 MB of non-Latin faces per ABI, and the tablet's /system/fonts covers those scripts.

@@ -9,6 +9,7 @@ import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
+import androidx.activity.enableEdgeToEdge
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -18,7 +19,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.DropdownMenu
@@ -58,18 +59,21 @@ import java.util.Locale
 import kotlin.coroutines.resume
 
 class MainActivity : ComponentActivity() {
-    private val engine by lazy { (application as? WordCraftApp)?.engine ?: Engine() }
+    private val app get() = application as WordCraftApp
+    private val engine by lazy { app.engine }
     private val recent by lazy { Recent(PrefsRecentStore(getSharedPreferences("recent", MODE_PRIVATE))) }
     private var commands by mutableStateOf<JSONObject?>(null)
     private var doc by mutableStateOf<DocumentView?>(null)
     /** The label of the ribbon command in flight, empty otherwise: the name in "isn't on the tablet yet" when it only asks for a dialog. */
     private var lastCommandLabel = ""
-    /** The file the document with this id was opened from or saved to; any other document has no file yet. */
-    private var current: Pair<Long, Uri>? = null
+    private var current: Pair<Long, Uri>?
+        get() = app.current
+        set(v) { app.current = v }
     /** The one open/save/close flow at a time; a menu tap or request that arrives while one runs (a dialog is up) is dropped. */
     private var flow: Job? = null
-    /** A file another app sent while a flow ran: opened when it ends. */
-    private var pendingView: Uri? = null
+    private var pendingView: Uri?
+        get() = app.pendingView
+        set(v) { app.pendingView = v }
     private var picked: CompletableDeferred<Uri?>? = null
     private val ready = CompletableDeferred<Unit>()
     private var tickBusy = false
@@ -82,6 +86,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        enableEdgeToEdge()
         // Collect before init: events wait in the engine's channel, but start the collector first anyway.
         lifecycleScope.launch(start = CoroutineStart.UNDISPATCHED) {
             engine.events.collect {
@@ -115,7 +120,8 @@ class MainActivity : ComponentActivity() {
         setContent {
             MaterialTheme {
                 val view by engine.view.collectAsState()
-                Column(Modifier.fillMaxSize().statusBarsPadding()) {
+                // Edge to edge on every API level (Android 15 forces it): the root pads for the bars, cutout and keyboard, so the page area ends above the keyboard.
+                Column(Modifier.fillMaxSize().safeDrawingPadding()) {
                     TopBar(view)
                     Ribbon(engine, view, commands, doc, { lastCommandLabel = it })
                     AndroidView(
@@ -136,7 +142,10 @@ class MainActivity : ComponentActivity() {
     /** One last recovery copy as the app leaves the screen. */
     override fun onStop() {
         super.onStop()
-        if (ready.isCompleted) engine.call("recovery.tick", report = false)
+        if (ready.isCompleted) {
+            doc?.commitComposition() // the word still being typed goes into the copy
+            engine.call("recovery.tick", report = false)
+        }
     }
 
     private fun viewedUri(i: Intent?): Uri? = i?.takeIf { it.action == Intent.ACTION_VIEW }?.data
@@ -275,7 +284,7 @@ class MainActivity : ComponentActivity() {
      * is dropped from the list when its permission or file is gone.
      */
     private suspend fun openUri(uri: Uri, fromRecent: RecentFile?, approved: Long) {
-        try { contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION) } catch (e: Exception) { /* some providers refuse; the file still opens */ }
+        persist(uri)
         val name = nameOf(uri)
         val file = withContext(Dispatchers.IO) { copyToCache(this@MainActivity, uri, name) }.getOrElse {
             val gone = fromRecent != null && (it is SecurityException || it is FileNotFoundException)
@@ -287,6 +296,11 @@ class MainActivity : ComponentActivity() {
         if (!ok(engine.runAwait("file.open", JSONObject().put("path", file.path)))) return // the engine has said why
         engine.view.value?.let { current = it.docId to uri }
         addRecent(uri, name)
+    }
+
+    /** Keep read and write access to [uri] across restarts, so Recent can open it again. */
+    private fun persist(uri: Uri) {
+        try { contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION) } catch (e: Exception) { /* some providers refuse; the file still opens and saves now */ }
     }
 
     private fun addRecent(uri: Uri, name: String) = recent.add(uri.toString(), name).forEach { release(it) }
@@ -304,30 +318,38 @@ class MainActivity : ComponentActivity() {
         val uri = current?.takeIf { it.first == v.docId }?.second ?: return saveAs()
         val name = nameOf(uri)
         if (extensionOf(name) !in KEEPS_EVERYTHING) return saveAs()
-        return write(uri, name)
+        return write(uri, name, inPlace = true)
     }
 
     private suspend fun saveAs(): Boolean {
         val v = engine.view.value ?: return false
         val uri = pick { saveAsPicker.launch(docxName(v.title)) } ?: return false
-        return write(uri, nameOf(uri))
+        return write(uri, nameOf(uri), inPlace = false)
     }
 
     /**
      * Bytes in the format [name] asks for, onto [uri]. Only a write that worked, with no edit since the
      * bytes were made, marks the document saved. A format that loses something is a copy: the document
-     * stays dirty, keeps its file, and the copy isn't listed as recent.
+     * stays dirty, keeps its file, and the copy isn't listed as recent. A file saved over in place
+     * ([inPlace]) that the app can only read (opened from another app) goes to Save As instead.
      */
-    private suspend fun write(uri: Uri, name: String): Boolean {
+    private suspend fun write(uri: Uri, name: String, inPlace: Boolean): Boolean {
         val format = if (extensionOf(name).isEmpty()) "$name.docx" else name
         val saved = bytesOf(format).getOrElse { return failed("save", name, it) }
-        withContext(Dispatchers.IO) { writeUri(this@MainActivity, uri, saved.bytes) }.onFailure { return failed("save", name, it) }
+        withContext(Dispatchers.IO) { writeUri(this@MainActivity, uri, saved.bytes, Engine.Saved.START) }.onFailure {
+            if (inPlace && it is CantOverwrite) {
+                message("Can't save over that file", "Choose where to save a copy.")
+                return saveAs()
+            }
+            return failed("save", name, it)
+        }
         if (extensionOf(format) !in KEEPS_EVERYTHING) {
             Toast.makeText(this, "Saved a copy", Toast.LENGTH_SHORT).show()
             return true
         }
         val marked = engine.markSavedIf(format, saved.rev)
         engine.view.value?.let { current = it.docId to uri }
+        persist(uri) // a Save As target is in Recent: keep it readable after the process dies
         addRecent(uri, name)
         Toast.makeText(this, if (marked) "Saved" else "Saved, but the document changed meanwhile", Toast.LENGTH_SHORT).show()
         return true
@@ -344,14 +366,14 @@ class MainActivity : ComponentActivity() {
         val uri = pick { pdfPicker.launch(name) } ?: return
         val shown = nameOf(uri)
         val saved = bytesOf(name).getOrElse { failed("export", shown, it); return }
-        withContext(Dispatchers.IO) { writeUri(this@MainActivity, uri, saved.bytes) }.onFailure { failed("export", shown, it); return }
+        withContext(Dispatchers.IO) { writeUri(this@MainActivity, uri, saved.bytes, Engine.Saved.START) }.onFailure { failed("export", shown, it); return }
         Toast.makeText(this, "Exported", Toast.LENGTH_SHORT).show()
     }
 
     private suspend fun share() {
         val name = docxName(engine.view.value?.title.orEmpty())
         val saved = bytesOf(name).getOrElse { failed("share", name, it); return }
-        val file = withContext(Dispatchers.IO) { writeShareFile(this@MainActivity, name, saved.bytes) }.getOrElse { failed("share", name, it); return }
+        val file = withContext(Dispatchers.IO) { writeShareFile(this@MainActivity, name, saved.bytes, Engine.Saved.START) }.getOrElse { failed("share", name, it); return }
         try {
             val uri = FileProvider.getUriForFile(this, "$packageName.files", file)
             val send = Intent(Intent.ACTION_SEND).setType(DOCX_MIME).putExtra(Intent.EXTRA_STREAM, uri)
