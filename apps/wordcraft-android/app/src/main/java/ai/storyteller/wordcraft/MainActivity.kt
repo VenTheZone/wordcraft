@@ -4,6 +4,7 @@ import android.app.AlertDialog
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Intent
+import android.content.res.Configuration
 import android.net.Uri
 import android.os.Bundle
 import android.widget.Toast
@@ -24,7 +25,11 @@ import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.darkColorScheme
+import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -33,6 +38,10 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -59,6 +68,9 @@ class MainActivity : ComponentActivity() {
     private val app get() = application as WordCraftApp
     private val engine by lazy { app.engine }
     private val recent by lazy { Recent(PrefsRecentStore(getSharedPreferences("recent", MODE_PRIVATE))) }
+    private val settings by lazy { getSharedPreferences("settings", MODE_PRIVATE) }
+    /** The Dark mode setting: the app's colours, and the page through `view.darkMode`. Until the user sets it, it follows the system. */
+    private var dark by mutableStateOf(false)
     private var commands by mutableStateOf<JSONObject?>(null)
     private var doc by mutableStateOf<DocumentView?>(null)
     /** The label of the ribbon command in flight, empty otherwise: the name in "isn't on the tablet yet" when it only asks for a dialog. */
@@ -83,9 +95,8 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        // The app is always light: light bar styles keep the status and nav icons dark when the system is in dark mode.
-        val light = SystemBarStyle.light(android.graphics.Color.TRANSPARENT, android.graphics.Color.TRANSPARENT)
-        enableEdgeToEdge(statusBarStyle = light, navigationBarStyle = light)
+        dark = settings.getBoolean("dark", resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK == Configuration.UI_MODE_NIGHT_YES)
+        applyBars()
         // Collect before init: events wait in the engine's channel, but start the collector first anyway.
         lifecycleScope.launch(start = CoroutineStart.UNDISPATCHED) {
             engine.events.collect {
@@ -97,7 +108,7 @@ class MainActivity : ComponentActivity() {
             }
         }
         launchFlow {
-            val fresh = engine.init(filesDir.path, Locale.getDefault().toLanguageTag(), intent?.getBooleanExtra("sample", false) == true)?.optBoolean("fresh", true) ?: true
+            val fresh = engine.init(filesDir.path, Locale.getDefault().toLanguageTag(), intent?.getBooleanExtra("sample", false) == true, dark)?.optBoolean("fresh", true) ?: true
             commands = engine.callAwait("commands")
             ready.complete(Unit)
             // The engine finds earlier copies on a worker (busy from the start until the scan lands), so wait, then ask.
@@ -117,22 +128,39 @@ class MainActivity : ComponentActivity() {
             override fun handleOnBackPressed() { launchFlow { if (guard() != null) finish() } }
         })
         setContent {
-            MaterialTheme {
+            MaterialTheme(colorScheme = if (dark) darkColorScheme() else lightColorScheme()) {
                 val view by engine.view.collectAsState()
-                // Edge to edge on every API level (Android 15 forces it): the root pads for the bars, cutout and keyboard, so the page area ends above the keyboard.
-                Column(Modifier.fillMaxSize().safeDrawingPadding()) {
-                    Ribbon(
-                        engine, view, commands, doc, { lastCommandLabel = it },
-                        leading = { FileMenu() },
-                        trailing = { Text((view?.title ?: "") + if (view?.dirty == true) " •" else "", fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                    )
-                    AndroidView(
-                        factory = { DocumentView(it, engine, lifecycleScope).also { v -> doc = v } },
-                        update = { it.update(view) }, modifier = Modifier.weight(1f).fillMaxWidth(),
-                    )
+                // Edge to edge on every API level (Android 15 forces it): the surface fills the screen, so its colour shows behind the bars and the keyboard; the column pads for them, cutout and keyboard, so the page area ends above the keyboard.
+                Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.surfaceVariant) {
+                    Column(Modifier.fillMaxSize().safeDrawingPadding()) {
+                        Ribbon(
+                            engine, view, commands, doc, { lastCommandLabel = it },
+                            leading = { FileMenu() },
+                            trailing = { Text((view?.title ?: "") + if (view?.dirty == true) " •" else "", fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                        )
+                        AndroidView(
+                            factory = { DocumentView(it, engine, lifecycleScope).also { v -> doc = v } },
+                            update = { it.setBackdrop(dark); it.update(view) }, modifier = Modifier.weight(1f).fillMaxWidth(),
+                        )
+                    }
                 }
             }
         }
+    }
+
+    /** Bar styles for the theme: light icons on dark bars, dark icons on light ones. Called again when the setting changes. */
+    private fun applyBars() {
+        val clear = android.graphics.Color.TRANSPARENT
+        val style = if (dark) SystemBarStyle.dark(clear) else SystemBarStyle.light(clear, clear)
+        enableEdgeToEdge(statusBarStyle = style, navigationBarStyle = style)
+    }
+
+    /** Dark mode on or off: the chrome and the page change together, and the choice is kept. */
+    private fun chooseDark(on: Boolean) {
+        dark = on
+        settings.edit().putBoolean("dark", on).apply()
+        applyBars()
+        engine.run("view.darkMode", JSONObject().put("value", on))
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -175,6 +203,11 @@ class MainActivity : ComponentActivity() {
                     Item("Save As…") { launchFlow { saveAs() } }
                     Item("Export PDF…") { launchFlow { exportPdf() } }
                     Item("Share…") { launchFlow { share() } }
+                    DropdownMenuItem(
+                        text = { Text("Dark mode") }, trailingIcon = { Switch(checked = dark, onCheckedChange = null) },
+                        modifier = Modifier.semantics(mergeDescendants = true) { role = Role.Switch; stateDescription = if (dark) "On" else "Off" },
+                        onClick = { file = false; chooseDark(!dark) },
+                    )
                     Item("Close") { launchFlow { newDocument() } }
                 }
             }
@@ -185,7 +218,9 @@ class MainActivity : ComponentActivity() {
 
     /** The button picked, or [CANCEL] when the dialog was dismissed (back, outside tap, activity gone). */
     private suspend fun ask(title: String, text: String, yes: String, no: String? = null, cancel: String? = null): Int = suspendCancellableCoroutine { c ->
-        val b = AlertDialog.Builder(this).setTitle(title).setMessage(text).setOnCancelListener { if (c.isActive) c.resume(CANCEL) }
+        // The activity theme is always light; the dialog follows the Dark mode setting instead.
+        val theme = if (dark) android.R.style.Theme_Material_Dialog_Alert else android.R.style.Theme_Material_Light_Dialog_Alert
+        val b = AlertDialog.Builder(this, theme).setTitle(title).setMessage(text).setOnCancelListener { if (c.isActive) c.resume(CANCEL) }
             .setPositiveButton(yes) { _, _ -> if (c.isActive) c.resume(YES) }
         no?.let { b.setNegativeButton(it) { _, _ -> if (c.isActive) c.resume(NO) } }
         cancel?.let { b.setNeutralButton(it) { _, _ -> if (c.isActive) c.resume(CANCEL) } }

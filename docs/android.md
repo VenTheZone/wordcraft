@@ -1,6 +1,6 @@
 # WordCraft on Android
 
-> **Last reviewed:** 2026-11-07 · **Last updated:** 2026-11-07 · **Change:** minor (final review fixes: edge-to-edge and keyboard insets, how Open and the app requests work, what is and isn't drawn)
+> **Last reviewed:** 2026-11-08 · **Last updated:** 2026-11-08 · **Change:** minor (Dark mode)
 
 WordCraft for Android tablets is a native Kotlin and Jetpack Compose app over the same Rust engine
 as the desktop and web builds. The engine runs in-process through a small JNI bridge, so a command
@@ -21,8 +21,12 @@ tablet. Code is in [`apps/wordcraft-android`](../apps/wordcraft-android): the br
   and Ctrl shortcuts, and the system clipboard.
 - A ribbon: a hand-made Home tab, the catalog tabs Insert to View with their commands that need no
   parameters, and command search.
-- File menu: New, Open, Recent, Save, Save As, Export PDF, Share and Close, through Android's file
-  picker.
+- File menu: New, Open, Recent, Save, Save As, Export PDF, Share, Dark mode and Close, through
+  Android's file picker.
+- Dark mode (File menu): a dark app and a dark page with light text, the engine's own dark page.
+  It follows the system's night mode at launch until the user sets it, then keeps the choice.
+  View > Switch Modes flips only the page, for that session; the setting and the app colours stay.
+  Export PDF and Share are not affected: the page's dark colours are for the screen only.
 - An unsaved-changes guard on every action that would replace the document, and crash recovery:
   the engine keeps recovery copies, and the app offers to restore them at the next start.
 
@@ -169,5 +173,6 @@ open the sample, type, save, and watch `adb logcat` for `UnsatisfiedLinkError` a
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-08 | minor | Dark mode: a File menu setting for the app colours and the page, version 0.1.2 |
 | 2026-11-07 | minor | Final review fixes: edge-to-edge handling, how Open and the app requests work, no selection handles, Mailings left out of the ribbon, no backup of app data |
 | 2026-11-07 | major | First committed version: what the tablet app does and lacks, the toolchain, the release signing setup, install and the emulator check |

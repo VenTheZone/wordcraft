@@ -28,6 +28,8 @@ data class ViewState(
     val canUndo: Boolean, val canRedo: Boolean, val status: String,
     val pages: List<PageInfo>, val caret: CaretInfo?, val selection: List<Box>,
     val format: JSONObject, val ime: ImeText?,
+    /** The page is drawn dark (white text on a dark page): the overlays on it change colour. */
+    val dark: Boolean,
 )
 
 sealed interface EngineEvent {
@@ -72,8 +74,9 @@ class Engine {
         if (report && ok.has("error") && !ok.isNull("error")) _events.trySend(EngineEvent.Error(ok.optString("error")))
     }
 
-    suspend fun init(filesDir: String, locale: String, sample: Boolean): JSONObject? = withContext(dispatcher) {
-        callNow("init", JSONObject().put("filesDir", filesDir).put("locale", locale).put("sample", sample))
+    /** [dark]: the Dark mode setting, which a new session starts its page in. */
+    suspend fun init(filesDir: String, locale: String, sample: Boolean, dark: Boolean): JSONObject? = withContext(dispatcher) {
+        callNow("init", JSONObject().put("filesDir", filesDir).put("locale", locale).put("sample", sample).put("dark", dark))
     }
     fun run(id: String, params: JSONObject = JSONObject(), ime: Boolean = false) { scope.launch { runNow(id, params, ime) } }
     suspend fun runAwait(id: String, params: JSONObject = JSONObject(), ime: Boolean = false): JSONObject? = withContext(dispatcher) { runNow(id, params, ime) }
@@ -159,6 +162,7 @@ class Engine {
             } ?: emptyList(),
             format = o.optJSONObject("format") ?: JSONObject(),
             ime = o.optJSONObject("ime")?.let { ImeText(it.optString("text"), it.optInt("cursor"), it.optInt("anchor"), it.optString("para")) },
+            dark = o.optBoolean("dark"),
         )
     } catch (e: Exception) { null }
 }

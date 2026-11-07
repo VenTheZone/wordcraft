@@ -58,12 +58,14 @@ class DocumentView(context: Context, private val engine: Engine, internal val sc
     private val pending = HashMap<String, Job>()
     /** Keys whose render returned nothing; not retried until the key (content or zoom) changes. */
     private val failed = HashSet<String>()
-    private val white = Paint().apply { color = Color.WHITE }
+    /** The page whose bitmap isn't ready yet: paper-coloured, so a dark page doesn't flash white. */
+    private val blank = Paint()
     private val paperShadow = Paint().apply { color = Color.argb(40, 0, 0, 0) }
     private val bitmapPaint = Paint(Paint.FILTER_BITMAP_FLAG)
-    private val selectionPaint = Paint().apply { color = Color.argb(70, 59, 91, 219) }
-    private val caretPaint = Paint().apply { color = Color.rgb(0x1A, 0x1A, 0x1A) }
-    private val preeditPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(0x1A, 0x1A, 0x1A); strokeWidth = 1.5f * density }
+    // The colours of these three follow the page (ViewState.dark), set when drawn.
+    private val selectionPaint = Paint()
+    private val caretPaint = Paint()
+    private val preeditPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { strokeWidth = 1.5f * density }
 
     /** The input method's uncommitted text ([DocInputConnection] sets it); drawn at the caret, never sent to the engine. */
     var preedit: String = ""
@@ -76,9 +78,17 @@ class DocumentView(context: Context, private val engine: Engine, internal val sc
     private val blink = object : Runnable { override fun run() { caretOn = !caretOn; invalidate(); postDelayed(this, BLINK_MS) } }
 
     init {
-        setBackgroundColor(Color.rgb(0xE9, 0xEB, 0xEE)); isFocusable = true; isFocusableInTouchMode = true
+        setBackdrop(false); isFocusable = true; isFocusableInTouchMode = true
         // The default focus highlight is a dark overlay drawn over the whole view; the caret already shows focus.
         defaultFocusHighlightEnabled = false
+    }
+
+    private var backdropDark: Boolean? = null
+    /** The backdrop behind the pages follows the app theme; the dark one is darker than the dark paper, so the page edges show. */
+    fun setBackdrop(dark: Boolean) {
+        if (dark == backdropDark) return
+        backdropDark = dark
+        setBackgroundColor(if (dark) Color.rgb(0x1E, 0x1E, 0x1E) else Color.rgb(0xE9, 0xEB, 0xEE))
     }
 
     fun update(view: ViewState?) {
@@ -401,7 +411,7 @@ class DocumentView(context: Context, private val engine: Engine, internal val sc
             val key = cacheKey(i, page, scale)
             // While zooming, the cache has nothing at the moving scale; draw the stretched newest bitmap and render once it settles.
             val bmp = cache.get(key) ?: newestBitmap(i).also { if (!zooming) requestRender(i, key, scale) }
-            if (bmp != null) canvas.drawBitmap(bmp, null, r, bitmapPaint) else canvas.drawRect(r, white)
+            if (bmp != null) canvas.drawBitmap(bmp, null, r, bitmapPaint) else canvas.drawRect(r, blank.apply { color = if (state?.dark == true) Color.rgb(0x33, 0x33, 0x33) else Color.WHITE })
         }
         drawOverlays(canvas)
         canvas.restore()
@@ -424,6 +434,9 @@ class DocumentView(context: Context, private val engine: Engine, internal val sc
     /** Selection boxes, the caret and the pre-edit text, in content coordinates. Reads state only. */
     private fun drawOverlays(canvas: Canvas) {
         val st = state ?: return
+        val ink = if (st.dark) Color.rgb(0xF2, 0xF2, 0xF2) else Color.rgb(0x1A, 0x1A, 0x1A)
+        caretPaint.color = ink; preeditPaint.color = ink
+        selectionPaint.color = if (st.dark) Color.argb(110, 110, 150, 255) else Color.argb(70, 59, 91, 219)
         for (b in st.selection) {
             val r = pageRects.getOrNull(b.page) ?: continue
             val top = r.top + b.y * zoom; val bottom = top + b.h * zoom

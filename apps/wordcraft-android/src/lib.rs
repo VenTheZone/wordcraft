@@ -101,6 +101,8 @@ fn init(slot: &mut Option<App>, p: &Value) -> Result<Value, String> {
         };
         let mut session = Session::new(doc);
         session.system_region = region;
+        // The app's Dark mode setting; View > Switch Modes changes the page after this, for the session.
+        session.view.dark_mode = p.get("dark").and_then(Value::as_bool) == Some(true);
         if let Some(dir) = p.get("filesDir").and_then(Value::as_str) {
             // Kotlin asks for a tick every few seconds, so the wakeup has nothing to do.
             if let Err(e) = session.enable_recovery(std::path::Path::new(dir).join("recovery"), std::sync::Arc::new(|| {})) {
@@ -196,7 +198,7 @@ fn view(app: &mut App) -> Value {
     json!({
         "docId": s.document_id(), "rev": s.rev(), "dirty": s.dirty, "title": title,
         "canUndo": s.can_undo(), "canRedo": s.can_redo(), "status": s.status,
-        "pages": pages, "caret": caret, "selection": selection, "format": format, "ime": ime,
+        "dark": s.dark_page(), "pages": pages, "caret": caret, "selection": selection, "format": format, "ime": ime,
     })
 }
 
@@ -464,6 +466,21 @@ mod tests {
         let again = ok("init", json!({"locale": "en-US"}));
         assert_eq!(again["fresh"], false, "a recreated activity finds the session");
         assert_eq!(again["view"]["dirty"], true, "and its document");
+    }
+
+    #[test]
+    fn dark_mode_follows_the_setting_and_changes_only_the_page() {
+        let _g = TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let v = ok("init", json!({"reset": true, "dark": true}))["view"].clone();
+        assert_eq!(v["dark"], true);
+        let keys = |v: &Value| v["pages"].as_array().unwrap().iter().map(|p| p["key"].clone()).collect::<Vec<_>>();
+        let r = ok("run", json!({"id": "view.darkMode", "params": {"value": false}}));
+        assert_eq!(r["error"], Value::Null);
+        assert_eq!(r["view"]["dark"], false);
+        assert_ne!(keys(&v), keys(&r["view"]), "the pages are drawn again");
+        assert_eq!(r["view"]["dirty"], false, "a view setting is not an edit");
+        assert_eq!(ok("init", json!({"reset": true}))["view"]["dark"], false, "light unless asked");
+        assert_eq!(ok("init", json!({"dark": true}))["view"]["dark"], false, "a recreated activity keeps the session");
     }
 
     #[test]
