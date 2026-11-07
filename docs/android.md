@@ -27,9 +27,10 @@ tablet. Code is in [`apps/wordcraft-android`](../apps/wordcraft-android): the br
 - Android 8.0 (API 26) or later. The release targets API 35.
 - A 64-bit ARM (arm64-v8a) tablet. The default build also includes x86_64 so the same APK runs on
   the emulator.
-- Storage for the APK: 175 MB with both ABIs, or about 85 MB for an arm64-only build. Nearly all
-  of it is the engine library (84 MB for arm64-v8a, 89 MB for x86_64, stored uncompressed so
-  Android maps it from the APK), which embeds the fonts and English proofing data.
+- Storage for the APK: 83 MB with both ABIs, or about 40 MB for an arm64-only build. Nearly all
+  of it is the engine library (38 MB for arm64-v8a, 43 MB for x86_64, stored uncompressed so
+  Android maps it from the APK), which embeds the English proofing data. Text in other scripts
+  uses the tablet's system fonts.
 
 ## Not on the tablet yet
 
@@ -58,23 +59,25 @@ Toolchain on the machine that built the checked-in app:
 | Jetpack Compose | BOM 2024.12.01 |
 
 Gradle runs `cargo ndk` for each ABI before it builds the app, so one command builds everything.
-The same optional inputs as the desktop build apply: `CRAFT_I18N_DIR` (craft-i18n, see
-[`README.md`](../README.md#quick-start)) and `CRAFT_FONTS_DIR` (craft-fonts, whose Carlito and
-friends keep Word documents paginated like Word). Without them the app still builds, with system
-fonts and the built-in English word list. Set `CRAFT_PROOF_EMBED=en` (Gradle sets it for you) so
-only English proofing data goes into the library. Use a separate `CARGO_TARGET_DIR` from the
-desktop build; each ABI's engine takes about 3 minutes the first time.
+`CRAFT_I18N_DIR` (craft-i18n, see [`README.md`](../README.md#quick-start)) is the one optional
+input: without it the app still builds, with the built-in English word list. Set
+`CRAFT_PROOF_EMBED=en` (Gradle sets it for you) so only English proofing data goes into the
+library. The Android build does not embed craft-fonts (Gradle drops `CRAFT_FONTS_DIR` even if
+your shell has it set): it would add about 44 MB of non-Latin faces to each ABI, and the tablet's
+own system fonts cover those scripts. Use a separate `CARGO_TARGET_DIR` from the desktop build;
+each ABI's engine takes about 3 minutes the first time.
 
 ```sh
 cd apps/wordcraft-android
 export ANDROID_HOME=$HOME/Android/Sdk
-export CRAFT_I18N_DIR=$PWD/../../../craft-i18n CRAFT_FONTS_DIR=$PWD/../../../craft-fonts
+export CRAFT_I18N_DIR=$PWD/../../../craft-i18n
 ./gradlew assembleDebug -Pabis=x86_64                    # emulator debug build
 ./gradlew assembleRelease -Pabis=arm64-v8a               # tablet release, arm64 only
 ./gradlew assembleRelease -Pabis=arm64-v8a,x86_64        # one APK for tablets and the emulator
 ```
 
-The APK is `app/build/outputs/apk/release/app-release.apk`. Unit tests: `./gradlew testDebugUnitTest`;
+The signed APK is `app/build/outputs/apk/release/app-release.apk`; without a key Gradle writes
+`app-release-unsigned.apk`, which Android won't install. Unit tests: `./gradlew testDebugUnitTest`;
 the bridge's Rust tests run with the workspace (`cargo test -p wordcraft-android`).
 
 ### Signing

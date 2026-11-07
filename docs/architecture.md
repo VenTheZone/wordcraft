@@ -9,11 +9,11 @@ committed, current summary. Rules for working in the code are in [`AGENTS.md`](.
 ## Layers
 
 On 2026-10-28, `find crates apps xtask -type f -name '*.rs' -print0 | xargs -0 wc -l` counted
-333,448 Rust source lines across 16 crates, 3 apps and `xtask`. `Cargo.toml` declares workspace
+333,448 Rust source lines across 16 crates, 3 desktop and web apps and `xtask` (`wordcraft-android`, added on 2026-11-07, has its own row and is not in these counts). `Cargo.toml` declares workspace
 members with `crates/*`, `apps/*` and `xtask`; `cargo xtask layers` verified 20 workspace packages
-(16 crates, 3 apps and `xtask`) and no layering violations. The layer and line counts below are
+(16 crates, 3 desktop and web apps and `xtask`) and no layering violations. The layer and line counts below are
 from that command and per-directory `find ... -name '*.rs' ... | wc -l` counts on that date. Each
-crate name links to its source tree. `wordcraft-android` joined on 2026-11-07 and is counted only in its own row.
+crate name links to its source tree.
 
 | Layer | Crate | Lines | Job |
 |---|---|---|---|

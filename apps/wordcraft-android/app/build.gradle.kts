@@ -8,8 +8,6 @@ plugins {
 val abis = (findProperty("abis") as String? ?: "arm64-v8a,x86_64").split(',').map { it.trim() }.filter { it.isNotEmpty() }
 val repo = rootDir.resolve("../..").canonicalFile
 val craftI18n = ((findProperty("craftI18nDir") as String?) ?: System.getenv("CRAFT_I18N_DIR"))?.let(::file) ?: repo.resolve("../craft-i18n")
-// Metric-compatible substitutes for Word's fonts (Carlito for Calibri, …) keep pagination like Word.
-val craftFonts = ((findProperty("craftFontsDir") as String?) ?: System.getenv("CRAFT_FONTS_DIR"))?.let(::file) ?: repo.resolve("../craft-fonts")
 
 android {
     namespace = "ai.storyteller.wordcraft"
@@ -62,8 +60,8 @@ val cargoBuild by tasks.registering(Exec::class) {
     environment("ANDROID_HOME", android.sdkDirectory.path)
     environment("CARGO_TARGET_DIR", System.getenv("CARGO_TARGET_DIR") ?: repo.resolve("target-android").path)
     environment("CRAFT_PROOF_EMBED", System.getenv("CRAFT_PROOF_EMBED") ?: "en")
-    if (craftFonts.isDirectory) environment("CRAFT_FONTS_DIR", craftFonts.path)
-    else logger.warn("craft-fonts not found at $craftFonts: Word documents fall back to system fonts with different metrics")
+    // Not in 0.1: craft-fonts adds about 44 MB of non-Latin faces per ABI, and the tablet's /system/fonts covers those scripts.
+    environment.remove("CRAFT_FONTS_DIR")
     if (craftI18n.isDirectory) environment("CRAFT_I18N_DIR", craftI18n.path)
     else logger.warn("craft-i18n not found at $craftI18n: English spelling falls back to the built-in word list")
 }
