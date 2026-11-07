@@ -267,6 +267,9 @@ class DocumentView(context: Context, private val engine: Engine, internal val sc
         else -> hardwareKey(keyCode, event) || super.onKeyDown(keyCode, event)
     }
 
+    /** Put the word being typed into the document; the engine job it queues runs before any command sent after this returns. */
+    fun commitComposition() { conn?.finishComposingText() }
+
     private fun cmd(id: String, params: JSONObject = JSONObject()): Boolean { engine.run(id, params); return true }
 
     /**
@@ -346,7 +349,7 @@ class DocumentView(context: Context, private val engine: Engine, internal val sc
      * engine to use its own last copy. A clip item that is a content URI is not opened: that would be
      * file I/O on the UI thread.
      */
-    private fun paste(): Boolean {
+    internal fun paste(): Boolean {
         var text = try {
             val item = context.getSystemService(ClipboardManager::class.java)?.primaryClip?.takeIf { it.itemCount > 0 }?.getItemAt(0)
             item?.text?.toString() ?: item?.takeIf { it.uri == null }?.coerceToText(context)?.toString().orEmpty()
