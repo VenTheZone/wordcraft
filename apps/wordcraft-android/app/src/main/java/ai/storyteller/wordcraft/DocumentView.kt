@@ -1,5 +1,6 @@
 package ai.storyteller.wordcraft
 
+import android.content.ClipboardManager
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Canvas
@@ -14,8 +15,12 @@ import android.view.HapticFeedbackConstants
 import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.ScaleGestureDetector
+import android.view.KeyCharacterMap
 import android.view.View
+import android.view.inputmethod.EditorInfo
+import android.view.inputmethod.InputConnection
 import android.view.inputmethod.InputMethodManager
+import android.text.InputType
 import android.widget.OverScroller
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -26,7 +31,7 @@ import org.json.JSONObject
  * The document: pages in a vertical stack, drawn from engine rasters, with the caret, selection
  * and input on top (A4, A5). Page geometry from the engine is in points; [zoom] is px per point.
  */
-class DocumentView(context: Context, private val engine: Engine, private val scope: CoroutineScope) : View(context) {
+class DocumentView(context: Context, private val engine: Engine, internal val scope: CoroutineScope) : View(context) {
     private val density = resources.displayMetrics.density
     private val gap = 16 * density
     private var state: ViewState? = null
@@ -57,7 +62,7 @@ class DocumentView(context: Context, private val engine: Engine, private val sco
     private val caretPaint = Paint().apply { color = Color.rgb(0x1A, 0x1A, 0x1A) }
     private val preeditPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(0x1A, 0x1A, 0x1A); strokeWidth = 1.5f * density }
 
-    /** The input method's uncommitted text (A5 sets it); drawn at the caret, never sent to the engine. */
+    /** The input method's uncommitted text ([DocInputConnection] sets it); drawn at the caret, never sent to the engine. */
     var preedit: String = ""
         set(value) { field = value; invalidate() }
 
@@ -80,6 +85,47 @@ class DocumentView(context: Context, private val engine: Engine, private val sco
         layoutPages()
         if ((old?.rev != view.rev || old.caret != view.caret) && !dragSelecting) scrollToCaret()
         restartBlink()
+        syncIme()
+    }
+
+    private var conn: DocInputConnection? = null
+    /** What the input method was last told: the text window, and the document it belongs to. */
+    private var imeSent: ImeText? = null
+    private var imeDoc = -1L
+
+    override fun onCheckIsTextEditor() = true
+
+    override fun onCreateInputConnection(outAttrs: EditorInfo): InputConnection {
+        outAttrs.inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES or InputType.TYPE_TEXT_FLAG_AUTO_CORRECT
+        outAttrs.imeOptions = EditorInfo.IME_FLAG_NO_FULLSCREEN or EditorInfo.IME_FLAG_NO_EXTRACT_UI or EditorInfo.IME_ACTION_NONE
+        val st = engine.view.value
+        val ime = st?.ime
+        outAttrs.initialSelStart = ime?.let { minOf(it.cursor, it.anchor) } ?: 0
+        outAttrs.initialSelEnd = ime?.let { maxOf(it.cursor, it.anchor) } ?: 0
+        imeSent = ime; imeDoc = st?.docId ?: -1L
+        return DocInputConnection(this, engine).also { it.ctx = ime; outAttrs.initialCapsMode = it.getCursorCapsMode(outAttrs.inputType); conn = it }
+    }
+
+    /**
+     * Tell the input method what the engine's view now holds: restart it when the paragraph or
+     * document changed, else report the selection. Waits while the connection has edits in flight
+     * (its own text is ahead of the engine's), and reads the engine's latest view, not the
+     * composition's, which can lag.
+     */
+    internal fun syncIme() {
+        val st = engine.view.value ?: return
+        val c = conn
+        if (c != null && c.busy) return
+        val ni = st.ime
+        c?.ctx = ni
+        val old = imeSent; val oldDoc = imeDoc
+        if (ni == old && st.docId == oldDoc) return
+        imeSent = ni; imeDoc = st.docId
+        val imm = context.getSystemService(InputMethodManager::class.java) ?: return
+        if (ni == null || old == null || ni.para != old.para || st.docId != oldDoc) {
+            preedit = ""
+            imm.restartInput(this)
+        } else imm.updateSelection(this, minOf(ni.cursor, ni.anchor), maxOf(ni.cursor, ni.anchor), -1, -1)
     }
 
     /** Solid caret now; blinking resumes after [BLINK_MS] if the view is focused and the selection is collapsed. */
@@ -117,7 +163,12 @@ class DocumentView(context: Context, private val engine: Engine, private val sco
     }
 
     // Only a width change refits the zoom; a height change (the soft keyboard) keeps the user's zoom.
-    override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) { if (w != oldw) zoom = 0f; layoutPages() }
+    // A shorter view (the soft keyboard came up) can hide the caret behind it: scroll it back into sight.
+    override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
+        if (w != oldw) zoom = 0f
+        layoutPages()
+        if (w == oldw && h < oldh) scrollToCaret()
+    }
 
     private fun contentHeight() = (pageRects.lastOrNull()?.bottom ?: 0f) + gap
     private fun contentWidth() = (pageRects.maxOfOrNull { it.right } ?: 0f) + gap
@@ -136,6 +187,8 @@ class DocumentView(context: Context, private val engine: Engine, private val sco
     }
 
     private fun placeAt(page: Int, x: Float, y: Float, extend: Boolean = false) {
+        // The caret moves away from the word being composed: drop it and let the keyboard start over.
+        if (preedit.isNotEmpty()) { preedit = ""; context.getSystemService(InputMethodManager::class.java)?.restartInput(this) }
         engine.run("caret.set", JSONObject().put("page", page).put("x", x.toDouble()).put("y", y.toDouble()).put("extend", extend))
     }
 
@@ -179,7 +232,88 @@ class DocumentView(context: Context, private val engine: Engine, private val sco
     override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean = when (keyCode) {
         KeyEvent.KEYCODE_ZOOM_IN -> { zoomTo(zoom * 1.25f, width / 2f, height / 2f); settleSoon(); true }
         KeyEvent.KEYCODE_ZOOM_OUT -> { zoomTo(zoom / 1.25f, width / 2f, height / 2f); settleSoon(); true }
-        else -> super.onKeyDown(keyCode, event)
+        else -> hardwareKey(keyCode, event) || super.onKeyDown(keyCode, event)
+    }
+
+    private fun cmd(id: String, params: JSONObject = JSONObject()): Boolean { engine.run(id, params); return true }
+
+    /**
+     * A key from a hardware keyboard (or one the soft keyboard sent as a key event), as the same
+     * commands the desktop keyboard runs. True when it was taken. Characters the soft keyboard
+     * commits as text never arrive here.
+     */
+    private fun hardwareKey(k: Int, e: KeyEvent): Boolean {
+        val ctrl = e.isCtrlPressed || e.isMetaPressed; val shift = e.isShiftPressed
+        val extend = JSONObject().put("extend", shift)
+        when (k) {
+            KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_NUMPAD_ENTER -> if (!ctrl) return cmd(if (shift) "text.lineBreak" else "text.newParagraph")
+            KeyEvent.KEYCODE_DEL -> return cmd(if (ctrl) "text.deleteWordBack" else "text.backspace")
+            KeyEvent.KEYCODE_FORWARD_DEL -> return cmd(if (ctrl) "text.deleteWordForward" else "text.delete")
+            KeyEvent.KEYCODE_TAB -> if (!ctrl) return cmd(if (shift) "text.backTab" else "text.tab")
+            KeyEvent.KEYCODE_DPAD_LEFT -> return cmd(if (ctrl) "caret.wordLeft" else "caret.left", extend)
+            KeyEvent.KEYCODE_DPAD_RIGHT -> return cmd(if (ctrl) "caret.wordRight" else "caret.right", extend)
+            KeyEvent.KEYCODE_DPAD_UP -> if (!ctrl) return cmd("caret.up", extend)
+            KeyEvent.KEYCODE_DPAD_DOWN -> if (!ctrl) return cmd("caret.down", extend)
+            KeyEvent.KEYCODE_MOVE_HOME -> return cmd(if (ctrl) "caret.docStart" else "caret.home", extend)
+            KeyEvent.KEYCODE_MOVE_END -> return cmd(if (ctrl) "caret.docEnd" else "caret.end", extend)
+            KeyEvent.KEYCODE_PAGE_UP -> if (!ctrl) return cmd("caret.pageUp", extend)
+            KeyEvent.KEYCODE_PAGE_DOWN -> if (!ctrl) return cmd("caret.pageDown", extend)
+        }
+        val function = k in KeyEvent.KEYCODE_F1..KeyEvent.KEYCODE_F12
+        if (ctrl || function) {
+            val name = keyName(k, e) ?: return false
+            if (ctrl && k == KeyEvent.KEYCODE_V && !shift && !e.isAltPressed) return paste()
+            val key = (if (ctrl) "Mod+" else "") + (if (e.isAltPressed) "Alt+" else "") + (if (shift) "Shift+" else "") + name
+            engine.call("shortcut", JSONObject().put("key", key))
+            return true
+        }
+        val u = e.unicodeChar
+        if (u in 32..0x10FFFF && u !in 127..159) return cmd("text.insert", JSONObject().put("text", String(Character.toChars(u))))
+        return false
+    }
+
+    /** The key's name as the command registry writes shortcuts (`B`, `7`, `F7`, `Left`, `]`), or null for a modifier or unknown key. */
+    private fun keyName(k: Int, e: KeyEvent): String? = when (k) {
+        in KeyEvent.KEYCODE_F1..KeyEvent.KEYCODE_F12 -> "F${k - KeyEvent.KEYCODE_F1 + 1}"
+        KeyEvent.KEYCODE_SPACE -> "Space"
+        KeyEvent.KEYCODE_INSERT -> "Insert"
+        KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_NUMPAD_ENTER -> "Enter"
+        KeyEvent.KEYCODE_TAB -> "Tab"
+        KeyEvent.KEYCODE_ESCAPE -> "Escape"
+        KeyEvent.KEYCODE_DEL -> "Backspace"
+        KeyEvent.KEYCODE_FORWARD_DEL -> "Delete"
+        KeyEvent.KEYCODE_DPAD_LEFT -> "Left"
+        KeyEvent.KEYCODE_DPAD_RIGHT -> "Right"
+        KeyEvent.KEYCODE_DPAD_UP -> "Up"
+        KeyEvent.KEYCODE_DPAD_DOWN -> "Down"
+        KeyEvent.KEYCODE_PAGE_UP -> "PageUp"
+        KeyEvent.KEYCODE_PAGE_DOWN -> "PageDown"
+        KeyEvent.KEYCODE_MOVE_HOME -> "Home"
+        KeyEvent.KEYCODE_MOVE_END -> "End"
+        in KeyEvent.KEYCODE_A..KeyEvent.KEYCODE_Z -> ('A' + (k - KeyEvent.KEYCODE_A)).toString()
+        in KeyEvent.KEYCODE_0..KeyEvent.KEYCODE_9 -> ('0' + (k - KeyEvent.KEYCODE_0)).toString()
+        KeyEvent.KEYCODE_COMMA -> ","
+        KeyEvent.KEYCODE_PERIOD -> "."
+        KeyEvent.KEYCODE_MINUS -> "-"
+        KeyEvent.KEYCODE_EQUALS -> "="
+        KeyEvent.KEYCODE_LEFT_BRACKET -> "["
+        KeyEvent.KEYCODE_RIGHT_BRACKET -> "]"
+        KeyEvent.KEYCODE_SEMICOLON -> ";"
+        KeyEvent.KEYCODE_APOSTROPHE -> "'"
+        KeyEvent.KEYCODE_SLASH -> "/"
+        KeyEvent.KEYCODE_BACKSLASH -> "\\"
+        KeyEvent.KEYCODE_GRAVE -> "`"
+        // Any other key: its own character, unshifted (so Ctrl+Shift+, is `,` not `<`).
+        else -> e.getUnicodeChar(0).takeIf { it in 33..0x10FFFF && it and KeyCharacterMap.COMBINING_ACCENT_MASK == 0 }?.let { String(Character.toChars(it)).uppercase() }
+    }
+
+    /** Ctrl+V: the system clipboard's text. An empty paste tells the engine to use its own last copy. */
+    private fun paste(): Boolean {
+        val text = try {
+            context.getSystemService(ClipboardManager::class.java)?.primaryClip?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.coerceToText(context)?.toString().orEmpty()
+        } catch (e: Exception) { "" }
+        engine.call("paste", JSONObject().put("text", text))
+        return true
     }
 
     /**

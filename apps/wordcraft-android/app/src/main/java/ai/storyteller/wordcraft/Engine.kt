@@ -7,10 +7,11 @@ import java.util.concurrent.Executors
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.asCoroutineDispatcher
-import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
@@ -45,10 +46,12 @@ class Engine {
     private val scope = CoroutineScope(SupervisorJob() + dispatcher)
     private val _view = MutableStateFlow<ViewState?>(null)
     val view: StateFlow<ViewState?> = _view
-    private val _events = MutableSharedFlow<EngineEvent>(extraBufferCapacity = 64)
-    val events: SharedFlow<EngineEvent> = _events
+    // A channel, not a shared flow: an event waits here until the (single) collector arrives, so an
+    // error or a copy reported before the Activity collects, or while it is recreated, isn't lost.
+    private val _events = Channel<EngineEvent>(Channel.BUFFERED)
+    val events: Flow<EngineEvent> = _events.receiveAsFlow()
 
-    private fun fail(message: String): JSONObject? { _events.tryEmit(EngineEvent.Error(message)); return null }
+    private fun fail(message: String): JSONObject? { _events.trySend(EngineEvent.Error(message)); return null }
 
     /** On the engine thread: one call, its `ok` payload, or null after reporting the error. */
     private fun callNow(method: String, params: JSONObject): JSONObject? {
@@ -62,9 +65,9 @@ class Engine {
     /** Take what an edit reply carries: the view, the app requests, the clipboard, the error. */
     private fun absorb(ok: JSONObject) {
         (ok.optJSONObject("view") ?: ok.takeIf { it.has("pages") })?.let { parseView(it)?.let { v -> _view.value = v } }
-        ok.optJSONArray("uiRequests")?.let { a -> for (i in 0 until a.length()) a.optJSONObject(i)?.let { _events.tryEmit(EngineEvent.UiRequest(it)) } }
-        ok.optJSONObject("clipboard")?.let { _events.tryEmit(EngineEvent.Clipboard(it.optString("text"), it.optString("html"))) }
-        if (ok.has("error") && !ok.isNull("error")) _events.tryEmit(EngineEvent.Error(ok.optString("error")))
+        ok.optJSONArray("uiRequests")?.let { a -> for (i in 0 until a.length()) a.optJSONObject(i)?.let { _events.trySend(EngineEvent.UiRequest(it)) } }
+        ok.optJSONObject("clipboard")?.let { _events.trySend(EngineEvent.Clipboard(it.optString("text"), it.optString("html"))) }
+        if (ok.has("error") && !ok.isNull("error")) _events.trySend(EngineEvent.Error(ok.optString("error")))
     }
 
     suspend fun init(filesDir: String, locale: String, sample: Boolean): JSONObject? = withContext(dispatcher) {
