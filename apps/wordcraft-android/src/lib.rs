@@ -67,7 +67,8 @@ fn dispatch(slot: &mut Option<App>, method: &str, p: &Value) -> Result<Value, St
 }
 
 fn init(slot: &mut Option<App>, p: &Value) -> Result<Value, String> {
-    if slot.is_none() || p.get("reset").and_then(Value::as_bool) == Some(true) {
+    let fresh = slot.is_none() || p.get("reset").and_then(Value::as_bool) == Some(true);
+    if fresh {
         let region = wordcraft_engine::Region::from_tag(p.get("locale").and_then(Value::as_str).unwrap_or("en-US"));
         let doc = if p.get("sample").and_then(Value::as_bool) == Some(true) {
             wordcraft_engine::sample::sample_document()
@@ -85,13 +86,16 @@ fn init(slot: &mut Option<App>, p: &Value) -> Result<Value, String> {
         *slot = Some(App { session, clip_sent: 0 });
     }
     let app = slot.as_mut().ok_or("init failed")?;
-    Ok(json!({"view": view(app), "recovered": recovery_list(&app.session)}))
+    // `fresh`: this call made the session. A recreated activity finds the old one, whose documents are open and not to be offered again.
+    Ok(json!({"view": view(app), "recovered": recovery_list(&app.session), "fresh": fresh}))
 }
 
 /// Saving and exporting write through Android's file picker, so the app does them: these come
 /// back as requests instead of writing a path on the device.
 fn app_request(id: &str) -> Option<&'static str> {
     match id {
+        // A new document would sit beside the one on screen, out of reach: the app closes the old one first.
+        "file.new" => Some("new"),
         "file.save" => Some("save"),
         "file.saveAs" => Some("saveAs"),
         "file.exportPdf" => Some("exportPdf"),
@@ -362,6 +366,28 @@ mod tests {
         let o = ok("run", json!({"id": "file.open", "params": {"path": "Tablet.docx", "data": b64}}));
         assert_eq!(o["error"], Value::Null);
         assert!(o["view"]["ime"]["text"].as_str().unwrap().contains("Hello tablet"));
+    }
+
+    #[test]
+    fn file_new_is_a_request_and_changes_nothing() {
+        let _g = TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let v = ok("init", json!({"reset": true, "locale": "en-US"}));
+        let id = v["view"]["docId"].clone();
+        for r in [ok("run", json!({"id": "file.new"})), ok("shortcut", json!({"key": "Mod+N"}))] {
+            assert_eq!(r["uiRequests"][0]["open"], "new", "{r}");
+            assert_eq!(r["view"]["docId"], id, "no document was added");
+        }
+        assert_eq!(ok("view", json!({}))["docId"], id);
+    }
+
+    #[test]
+    fn init_says_whether_it_made_the_session() {
+        let _g = TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        assert_eq!(ok("init", json!({"reset": true}))["fresh"], true);
+        ok("run", json!({"id": "text.insert", "params": {"text": "kept"}}));
+        let again = ok("init", json!({"locale": "en-US"}));
+        assert_eq!(again["fresh"], false, "a recreated activity finds the session");
+        assert_eq!(again["view"]["dirty"], true, "and its document");
     }
 
     #[test]

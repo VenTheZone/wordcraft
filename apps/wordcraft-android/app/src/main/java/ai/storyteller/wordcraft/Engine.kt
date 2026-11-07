@@ -54,22 +54,22 @@ class Engine {
     private fun fail(message: String): JSONObject? { _events.trySend(EngineEvent.Error(message)); return null }
 
     /** On the engine thread: one call, its `ok` payload, or null after reporting the error. */
-    internal fun callNow(method: String, params: JSONObject = JSONObject()): JSONObject? = try {
+    internal fun callNow(method: String, params: JSONObject = JSONObject(), report: Boolean = true): JSONObject? = try {
         val reply = JSONObject(Native.call(method, params.toString()))
         if (reply.has("error")) fail(reply.optString("error"))
         else {
             val ok = reply.opt("ok")
-            if (ok is JSONObject) absorb(ok)
+            if (ok is JSONObject) absorb(ok, report)
             ok as? JSONObject ?: JSONObject().put("value", ok)
         }
     } catch (e: Throwable) { fail(e.message ?: "The engine failed") } // absorb included: nothing escapes into the caller's coroutine
 
-    /** Take what an edit reply carries: the view, the app requests, the clipboard, the error. */
-    private fun absorb(ok: JSONObject) {
+    /** Take what an edit reply carries: the view, the app requests, the clipboard, the error (unless [report] is off: the caller shows it). */
+    private fun absorb(ok: JSONObject, report: Boolean) {
         (ok.optJSONObject("view") ?: ok.takeIf { it.has("pages") })?.let { parseView(it)?.let { v -> _view.value = v } }
         ok.optJSONArray("uiRequests")?.let { a -> for (i in 0 until a.length()) a.optJSONObject(i)?.let { _events.trySend(EngineEvent.UiRequest(it)) } }
         ok.optJSONObject("clipboard")?.let { _events.trySend(EngineEvent.Clipboard(it.optString("text"), it.optString("html"))) }
-        if (ok.has("error") && !ok.isNull("error")) _events.trySend(EngineEvent.Error(ok.optString("error")))
+        if (report && ok.has("error") && !ok.isNull("error")) _events.trySend(EngineEvent.Error(ok.optString("error")))
     }
 
     suspend fun init(filesDir: String, locale: String, sample: Boolean): JSONObject? = withContext(dispatcher) {
@@ -83,8 +83,25 @@ class Engine {
      * nothing queued later runs in the middle of it. [block] calls [runNow] and [callNow].
      */
     internal suspend fun job(block: Engine.() -> Unit) = withContext(dispatcher) { block() }
-    fun call(method: String, params: JSONObject = JSONObject()) { scope.launch { callNow(method, params) } }
-    suspend fun callAwait(method: String, params: JSONObject = JSONObject()): JSONObject? = withContext(dispatcher) { callNow(method, params) }
+    fun call(method: String, params: JSONObject = JSONObject(), report: Boolean = true) { scope.launch { callNow(method, params, report) } }
+    suspend fun callAwait(method: String, params: JSONObject = JSONObject(), report: Boolean = true): JSONObject? = withContext(dispatcher) { callNow(method, params, report) }
+
+    /**
+     * Close the active document, discarding it, only if it is still at revision [rev]: true closed,
+     * false the engine refused, null the document changed since [rev] was read. Check and close are
+     * one engine job, so no edit lands between them.
+     */
+    suspend fun closeIfRev(rev: Long): Boolean? = withContext(dispatcher) {
+        if (callNow("view")?.optLong("rev", -1L) != rev) return@withContext null
+        val r = runNow("file.closeDocument", JSONObject().put("force", true))
+        r != null && r.isNull("error")
+    }
+
+    /** `markSaved` only if the document is still at revision [rev] (what was written): an edit made while the file was being written stays dirty. */
+    suspend fun markSavedIf(name: String, rev: Long): Boolean = withContext(dispatcher) {
+        if (callNow("view")?.optLong("rev", -1L) != rev) return@withContext false
+        callNow("markSaved", JSONObject().put("name", name)) != null
+    }
 
     /** Page [page] at [scale] px per point, or null (bad page, out of memory, engine error). */
     suspend fun render(page: Int, scale: Float): Bitmap? = withContext(dispatcher) {
@@ -98,11 +115,14 @@ class Engine {
         } catch (e: Throwable) { null }
     }
 
-    /** The document as [name]'s format; the app writes it, then calls `markSaved` if it worked. */
-    suspend fun save(name: String): Result<ByteArray> = withContext(dispatcher) {
+    /** The bytes of a save and the document revision they were made at. */
+    class Saved(val bytes: ByteArray, val rev: Long)
+
+    /** The document as [name]'s format and its revision, read in one engine job; the app writes it, then calls [markSavedIf]. */
+    suspend fun save(name: String): Result<Saved> = withContext(dispatcher) {
         val out = try { Native.save(name) } catch (e: Throwable) { return@withContext Result.failure(e) }
         when (out.firstOrNull()) {
-            0.toByte() -> Result.success(out.copyOfRange(1, out.size))
+            0.toByte() -> Result.success(Saved(out.copyOfRange(1, out.size), callNow("view")?.optLong("rev", -1L) ?: -1L))
             else -> Result.failure(IllegalStateException(if (out.size > 1) String(out, 1, out.size - 1) else "The document couldn't be saved"))
         }
     }

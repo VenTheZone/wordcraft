@@ -8,6 +8,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.io.IOException
+import java.io.InputStream
 
 /** Largest file the app copies in to open: bigger is refused with a message, not an out-of-memory crash. */
 const val MAX_OPEN_BYTES = 200L shl 20
@@ -63,24 +64,32 @@ fun copyToCache(ctx: Context, uri: Uri, name: String, maxBytes: Long = MAX_OPEN_
         if (!dir.mkdirs() && !dir.isDirectory) throw IOException("The app's cache folder isn't writable")
         val file = File(dir, cacheName(name))
         val input = ctx.contentResolver.openInputStream(uri) ?: throw IOException("The file can't be read")
-        var total = 0L
-        input.use { i ->
-            file.outputStream().use { o ->
-                val buf = ByteArray(64 * 1024)
-                while (true) {
-                    val n = i.read(buf)
-                    if (n < 0) break
-                    total += n
-                    if (total > maxBytes) throw IOException("The file is larger than ${maxBytes shr 20} MB")
-                    o.write(buf, 0, n)
-                }
-            }
-        }
-        Result.success(file)
+        copyStream(input, file, maxBytes).map { file }
     } catch (e: Exception) {
         dir.deleteRecursively()
         Result.failure(e)
     }
+}
+
+/** Copy [input] to [file], at most [max] bytes: past that it fails and leaves no file. Closes [input]. */
+fun copyStream(input: InputStream, file: File, max: Long): Result<Unit> = try {
+    var total = 0L
+    input.use { i ->
+        file.outputStream().use { o ->
+            val buf = ByteArray(64 * 1024)
+            while (true) {
+                val n = i.read(buf)
+                if (n < 0) break
+                total += n
+                if (total > max) throw IOException("The file is larger than ${max shr 20} MB")
+                o.write(buf, 0, n)
+            }
+        }
+    }
+    Result.success(Unit)
+} catch (e: Exception) {
+    file.delete()
+    Result.failure(e)
 }
 
 /**
@@ -126,6 +135,11 @@ class PrefsRecentStore(private val prefs: SharedPreferences) : RecentStore {
 /** The last [max] files opened or saved: newest first, each file once. */
 class Recent(private val store: RecentStore, private val max: Int = 10) {
     fun list() = store.load()
-    fun add(uri: String, name: String) = store.save((listOf(RecentFile(uri, name)) + list().filter { it.uri != uri }).take(max))
+    /** Add [uri] at the front; returns the entries pushed off the end, whose permission grants can go. */
+    fun add(uri: String, name: String): List<RecentFile> {
+        val all = listOf(RecentFile(uri, name)) + list().filter { it.uri != uri }
+        store.save(all.take(max))
+        return all.drop(max)
+    }
     fun remove(uri: String) = store.save(list().filter { it.uri != uri })
 }
