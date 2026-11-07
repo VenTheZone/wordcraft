@@ -24,8 +24,22 @@ android {
         versionName = "0.1.0"
         ndk { abiFilters += abis }
     }
+    signingConfigs {
+        create("release") {
+            val store = findProperty("WORDCRAFT_KEYSTORE") as String?
+            if (store != null) {
+                storeFile = file(store)
+                storePassword = findProperty("WORDCRAFT_KEYSTORE_PASSWORD") as String?
+                keyAlias = findProperty("WORDCRAFT_KEY_ALIAS") as String?
+                keyPassword = findProperty("WORDCRAFT_KEY_PASSWORD") as String?
+            }
+        }
+    }
     buildTypes {
         release {
+            // Signed with the owner's key from ~/.gradle/gradle.properties; without it the APK is
+            // unsigned and Android won't install it.
+            signingConfig = signingConfigs.getByName("release").takeIf { it.storeFile != null }
             isMinifyEnabled = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }

@@ -9,6 +9,7 @@ WordCraft is a clean-room, open-source, Rust-native word processor targeting Mic
 ## Never crash
 People trust WordCraft with their writing; a crash loses their work. **This outranks feature work**: never ship a feature through a panic path, and fix a crash before building on top of it.
 - **No panics in non-test code:** no `unwrap()`, `expect()`, `panic!`, `unreachable!`, `todo!`, `unimplemented!`; no `unsafe` (`unsafe_code = "forbid"`).
+- **Exception:** `apps/wordcraft-android/src/exports.rs` exports the JNI entry points (`#[unsafe(no_mangle)]`), the only unsafe code; its Kotlin app (`apps/wordcraft-android/app`) is the one place WordCraft isn't Rust.
 - **Errors are `Result<T, E>`** through the crate's error type and `?`. An unfinished feature returns an error or is disabled; it never panics.
 - **Input-derived numbers are hostile** (files, commands, MCP/control params): `get()` instead of `[i]`, slice strings only at char boundaries, checked/saturating arithmetic, clamp sizes, cap allocations, bound recursion.
 - **Last-resort guard:** `Session::run` turns an escaped panic into an error and restores the document. It's a safety net, not a licence.

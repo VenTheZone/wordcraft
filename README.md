@@ -20,7 +20,7 @@
 <p align="center">
   A fast, open-source word processor with a familiar workflow: the ribbon, styles,
   tables, track changes, references and mail merge. It reads and writes .docx, runs natively on
-  macOS, Windows, Linux and BSD, and in the browser via WebAssembly.<br>
+  macOS, Windows, Linux, BSD and Android tablets, and in the browser via WebAssembly.<br>
   <i>By the ArtCraft team.</i>
 </p>
 
@@ -100,7 +100,7 @@ Every screenshot below is WordCraft itself, rendered offscreen by its own UI tes
   with real, selectable text, links and bookmarks.
 - **Fast.** Paragraph layout is cached, so typing in a 188-page document re-lays it out in about
   1.4 ms; pages render on demand.
-- **Everywhere.** One Rust codebase for macOS, Windows, Linux, BSD and the web. No Electron, no
+- **Everywhere.** One Rust codebase for macOS, Windows, Linux, BSD, Android tablets and the web. No Electron, no
   Tauri: native [egui](https://github.com/emilk/egui) on the GPU.
 - **Built for agents.** Every action is a command with an id. The same 422 commands drive the
   ribbon, keyboard shortcuts, the command search, a command-line tool, a JSON control channel and
@@ -165,6 +165,13 @@ wordcraft-cli run --script job.json                 # the same from a file: comm
 ```
 
 Web: `cd apps/wordcraft-web && trunk serve`, then open <http://127.0.0.1:8771/?sample>.
+
+## Android
+
+WordCraft also runs on Android tablets (Android 8 or later): a native Kotlin and Jetpack Compose
+app over the same Rust engine, with touch selection, the soft keyboard, a ribbon and crash
+recovery. It is early: dialogs, pen input and several open documents are not there yet. How to
+build, sign and install it, and what it can and can't do, is in [docs/android.md](docs/android.md).
 
 ## For agents: CLI and MCP
 
