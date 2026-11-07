@@ -27,7 +27,7 @@ class MainActivity : ComponentActivity() {
     private val engine by lazy { (application as? WordCraftApp)?.engine ?: Engine() }
     private var commands by mutableStateOf<JSONObject?>(null)
     private var doc by mutableStateOf<DocumentView?>(null)
-    /** The label of the command the ribbon ran last: the name in "isn't on the tablet yet" when it only asks for a dialog. */
+    /** The label of the ribbon command in flight, empty otherwise: the name in "isn't on the tablet yet" when it only asks for a dialog. */
     private var lastCommandLabel = ""
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -67,7 +67,7 @@ class MainActivity : ComponentActivity() {
      */
     private fun onUiRequest(r: JSONObject) {
         if (r.has("scrollTo") || r.has("focus") || r.has("close") || r.optString("open") in A7_OPEN) return
-        Toast.makeText(this, "$lastCommandLabel isn't on the tablet yet", Toast.LENGTH_SHORT).show()
+        Toast.makeText(this, "${lastCommandLabel.ifEmpty { "That command" }} isn't on the tablet yet", Toast.LENGTH_SHORT).show()
     }
 
     /** A copy or cut in the engine, on the system clipboard: rich when there is HTML, else plain. */

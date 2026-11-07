@@ -57,16 +57,19 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
@@ -74,6 +77,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.PopupProperties
+import kotlinx.coroutines.launch
 import org.json.JSONObject
 
 /** One registered command, from the bridge's `commands` reply. */
@@ -94,6 +98,9 @@ internal fun usableTabs(entries: List<Entry>, cmds: Map<String, Cmd>): Map<Strin
     return GENERATED_TABS.mapNotNull { t -> usable.filter { it.tab == t }.takeIf { it.isNotEmpty() }?.let { t to it.groupBy { e -> e.group } } }.toMap()
 }
 
+/** A command's params doc names a required key as `"key":`; optional ones are `"key"?:`. */
+internal fun needsParams(doc: String) = doc.contains("\":")
+
 /** Commands whose label contains [query] (case-insensitive), at most [max]; none for a blank query. */
 internal fun searchCommands(cmds: Collection<Cmd>, query: String, max: Int = 30): List<Cmd> {
     val q = query.trim()
@@ -103,7 +110,7 @@ internal fun searchCommands(cmds: Collection<Cmd>, query: String, max: Int = 30)
 private fun parseCommands(reply: JSONObject?): Pair<Map<String, Cmd>, List<Entry>> {
     val cs = reply?.optJSONArray("commands")
     val cmds = (0 until (cs?.length() ?: 0)).mapNotNull { i ->
-        cs?.optJSONObject(i)?.let { Cmd(it.optString("id"), it.optString("label"), it.optBoolean("enabled", true), it.optString("params").contains("\":")) }
+        cs?.optJSONObject(i)?.let { Cmd(it.optString("id"), it.optString("label"), it.optBoolean("enabled", true), needsParams(it.optString("params"))) }
     }.associateBy { it.id }
     val es = reply?.optJSONArray("catalog")
     val entries = (0 until (es?.length() ?: 0)).mapNotNull { i ->
@@ -114,7 +121,7 @@ private fun parseCommands(reply: JSONObject?): Pair<Map<String, Cmd>, List<Entry
 
 private val FONTS = listOf("Source Sans 3", "Source Serif 4", "Inter", "JetBrains Mono", "Roboto", "Noto Serif", "Noto Sans")
 private val SIZES = listOf(8, 9, 10, 11, 12, 14, 16, 18, 20, 24, 28, 36, 48, 72)
-private val SWATCHES = listOf("000000", "C92A2A", "E8590C", "F08C00", "2F9E44", "1971C2", "6741D9", "868E96")
+private val SWATCHES = listOf("000000" to "Black", "C92A2A" to "Red", "E8590C" to "Orange", "F08C00" to "Amber", "2F9E44" to "Green", "1971C2" to "Blue", "6741D9" to "Purple", "868E96" to "Gray")
 private val STYLES = listOf("Normal" to "para.normal", "Heading 1" to "para.heading1", "Heading 2" to "para.heading2", "Heading 3" to "para.heading3")
 private val STYLE_IDS = listOf("Normal", "Heading1", "Heading2", "Heading3")
 
@@ -129,19 +136,24 @@ fun Ribbon(engine: Engine, view: ViewState?, commands: JSONObject?, doc: Documen
     val (cmds, entries) = remember(fresh, commands) { parseCommands(fresh ?: commands) }
     val tabs = remember(cmds, entries) { usableTabs(entries, cmds) }
     var tab by rememberSaveable { mutableStateOf("Home") }
-    // ponytail: enabled flags are a snapshot from when a tab opens; they go stale while it stays open.
-    LaunchedEffect(tab) { if (tab != "Home") engine.callAwait("commands")?.let { fresh = it } }
+    // A saved tab that the loaded catalog doesn't have (commands still loading) shows Home.
+    val shown = if (tab == "Home" || tab in tabs) tab else "Home"
+    val refresh: suspend () -> Unit = { engine.callAwait("commands")?.let { fresh = it } }
+    // ponytail: enabled flags are a snapshot from when a tab opens or a search starts; they go stale while it stays open.
+    LaunchedEffect(shown) { if (shown != "Home") refresh() }
+    val scope = rememberCoroutineScope()
 
     fun act(id: String, params: JSONObject = JSONObject()) {
         doc?.commitComposition()
         onRun(cmds[id]?.label ?: id)
-        engine.run(id, params)
+        // The label is for this command's own dialog request only: the reply is handled before runAwait returns, then it is cleared.
+        scope.launch { engine.runAwait(id, params); onRun("") }
     }
 
     Column(modifier.fillMaxWidth().height(112.dp).background(MaterialTheme.colorScheme.surfaceVariant)) {
         Row(Modifier.fillMaxWidth().height(40.dp).horizontalScroll(rememberScrollState())) {
             for (t in listOf("Home") + tabs.keys) {
-                val on = t == tab
+                val on = t == shown
                 Box(Modifier.fillMaxHeight().clickable { tab = t }.padding(horizontal = 16.dp).semantics { selected = on }, contentAlignment = Alignment.Center) {
                     Text(t, fontSize = 14.sp, color = if (on) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface)
                 }
@@ -149,15 +161,15 @@ fun Ribbon(engine: Engine, view: ViewState?, commands: JSONObject?, doc: Documen
         }
         HorizontalDivider()
         Row(Modifier.fillMaxWidth().weight(1f).horizontalScroll(rememberScrollState()), verticalAlignment = Alignment.CenterVertically) {
-            if (tab == "Home") {
+            if (shown == "Home") {
                 HistoryGroup(view, ::act)
-                ClipboardGroup(doc, onRun, ::act)
+                ClipboardGroup(doc, ::act)
                 FontGroup(view, ::act)
                 ParagraphGroup(::act)
                 StylesGroup(view, ::act)
-                EditingGroup(cmds.values, doc, ::act)
+                EditingGroup(cmds.values, doc, refresh, ::act)
             } else {
-                GeneratedTab(tabs[tab].orEmpty(), cmds, ::act)
+                GeneratedTab(tabs[shown].orEmpty(), cmds, ::act)
             }
         }
     }
@@ -203,8 +215,8 @@ private fun HistoryGroup(view: ViewState?, act: Act) = Group("Undo") {
 }
 
 @Composable
-private fun ClipboardGroup(doc: DocumentView?, onRun: (String) -> Unit, act: Act) = Group("Clipboard") {
-    RibbonButton({ doc?.commitComposition(); onRun("Paste"); doc?.paste() }, icon = Icons.Filled.ContentPaste, desc = "Paste")
+private fun ClipboardGroup(doc: DocumentView?, act: Act) = Group("Clipboard") {
+    RibbonButton({ doc?.commitComposition(); doc?.paste() }, icon = Icons.Filled.ContentPaste, desc = "Paste")
     RibbonButton({ act("edit.cut", JSONObject()) }, icon = Icons.Filled.ContentCut, desc = "Cut")
     RibbonButton({ act("edit.copy", JSONObject()) }, icon = Icons.Filled.ContentCopy, desc = "Copy")
     RibbonButton({ act("edit.formatPainter", JSONObject()) }, icon = Icons.Filled.FormatPaint, desc = "Format Painter")
@@ -237,8 +249,10 @@ private fun FontGroup(view: ViewState?, act: Act) {
             RibbonButton({ open = true }, icon = Icons.Filled.FormatColorText, desc = "Font color")
             DropdownMenu(open, { open = false }) {
                 Row(Modifier.padding(horizontal = 8.dp)) {
-                    for (hex in SWATCHES) Box(Modifier.padding(2.dp).size(32.dp).clip(CircleShape).background(Color(0xFF000000L or hex.toLong(16)))
-                        .clickable { open = false; act("format.color", JSONObject().put("color", hex)) })
+                    for ((hex, name) in SWATCHES) Box(
+                        Modifier.size(40.dp).clickable(role = Role.Button) { open = false; act("format.color", JSONObject().put("color", hex)) }.semantics { contentDescription = name },
+                        contentAlignment = Alignment.Center,
+                    ) { Box(Modifier.size(28.dp).clip(CircleShape).background(Color(0xFF000000L or hex.toLong(16)))) }
                 }
                 DropdownMenuItem({ Text("Automatic") }, { open = false; act("format.color", JSONObject().put("color", "auto")) })
             }
@@ -268,8 +282,11 @@ private fun StylesGroup(view: ViewState?, act: Act) = Group("Styles") {
 
 /** "Search commands" (Word's Tell me): every command by label; a tap runs it with no params. */
 @Composable
-private fun EditingGroup(cmds: Collection<Cmd>, doc: DocumentView?, act: Act) = Group("Editing") {
+private fun EditingGroup(cmds: Collection<Cmd>, doc: DocumentView?, refresh: suspend () -> Unit, act: Act) = Group("Editing") {
     var query by remember { mutableStateOf("") }
+    // The list is closed by tapping away; typing or tapping the field opens it again. The query stays.
+    var open by remember { mutableStateOf(true) }
+    LaunchedEffect(query.isNotEmpty()) { if (query.isNotEmpty()) refresh() }
     val focus = LocalFocusManager.current
     val found = remember(cmds, query) { searchCommands(cmds, query) }
     Box {
@@ -279,12 +296,12 @@ private fun EditingGroup(cmds: Collection<Cmd>, doc: DocumentView?, act: Act) = 
         ) {
             Icon(Icons.Filled.Search, null, Modifier.size(20.dp))
             BasicTextField(
-                query, { query = it }, Modifier.padding(start = 8.dp).fillMaxWidth(), singleLine = true,
+                query, { query = it; open = true }, Modifier.padding(start = 8.dp).fillMaxWidth().onFocusChanged { if (it.isFocused) open = true }, singleLine = true,
                 textStyle = androidx.compose.ui.text.TextStyle(fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurface),
                 decorationBox = { inner -> if (query.isEmpty()) Text("Search commands", color = Color.Gray, fontSize = 14.sp); inner() },
             )
         }
-        DropdownMenu(found.isNotEmpty(), { query = "" }, Modifier.heightIn(max = 360.dp), properties = PopupProperties(focusable = false)) {
+        DropdownMenu(found.isNotEmpty() && open, { open = false }, Modifier.heightIn(max = 360.dp), properties = PopupProperties(focusable = false)) {
             for (c in found) DropdownMenuItem({ Text(c.label, maxLines = 1, overflow = TextOverflow.Ellipsis) }, {
                 query = ""; focus.clearFocus(); doc?.requestFocus()
                 act(c.id, JSONObject())

@@ -1,6 +1,7 @@
 package ai.storyteller.wordcraft
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -29,5 +30,13 @@ class RibbonTest {
         assertTrue(searchCommands(cmds, "").isEmpty())
         assertTrue(searchCommands(cmds, "   ").isEmpty())
         assertTrue(searchCommands(cmds, "nothing like this").isEmpty())
+    }
+
+    @Test fun requiredParamsAreQuotedKeysWithoutQuestionMark() {
+        assertFalse(needsParams("{}"))
+        assertFalse(needsParams("""{"value"?: bool}"""))
+        assertFalse(needsParams("""{"value"?: bool, "style"?: "single|double"}"""))
+        assertTrue(needsParams("""{"size": number}"""))
+        assertTrue(needsParams("""{"path": string, "data"?: base64}"""))
     }
 }
