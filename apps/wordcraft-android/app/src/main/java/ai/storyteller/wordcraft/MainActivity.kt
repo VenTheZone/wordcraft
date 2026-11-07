@@ -13,23 +13,18 @@ import androidx.activity.SystemBarStyle
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -40,6 +35,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.FileProvider
 import androidx.lifecycle.Lifecycle
@@ -125,8 +121,11 @@ class MainActivity : ComponentActivity() {
                 val view by engine.view.collectAsState()
                 // Edge to edge on every API level (Android 15 forces it): the root pads for the bars, cutout and keyboard, so the page area ends above the keyboard.
                 Column(Modifier.fillMaxSize().safeDrawingPadding()) {
-                    TopBar(view)
-                    Ribbon(engine, view, commands, doc, { lastCommandLabel = it })
+                    Ribbon(
+                        engine, view, commands, doc, { lastCommandLabel = it },
+                        leading = { FileMenu() },
+                        trailing = { Text((view?.title ?: "") + if (view?.dirty == true) " •" else "", fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                    )
                     AndroidView(
                         factory = { DocumentView(it, engine, lifecycleScope).also { v -> doc = v } },
                         update = { it.update(view) }, modifier = Modifier.weight(1f).fillMaxWidth(),
@@ -153,41 +152,30 @@ class MainActivity : ComponentActivity() {
 
     private fun viewedUri(i: Intent?): Uri? = i?.takeIf { it.action == Intent.ACTION_VIEW }?.data
 
+    /** The File button and its menu, drawn like a ribbon tab: it sits at the start of the tab row. */
     @Composable
-    private fun TopBar(view: ViewState?) {
+    private fun FileMenu() {
         var file by remember { mutableStateOf(false) }
         var recentList by remember { mutableStateOf(false) }
-        var more by remember { mutableStateOf(false) }
         @Composable fun Item(text: String, closes: Boolean = true, run: () -> Unit) =
-            DropdownMenuItem(text = { Text(text) }, onClick = { if (closes) { file = false; more = false }; run() })
-        Row(Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceVariant).padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-            Box {
-                TextButton(onClick = { recentList = false; file = true }) { Text("File") }
-                DropdownMenu(expanded = file, onDismissRequest = { file = false }) {
-                    if (recentList) {
-                        Item("Back", closes = false) { recentList = false }
-                        recent.list().forEach { r -> Item(r.name) { openRecent(r) } }
-                    } else {
-                        Item("New") { launchFlow { newDocument() } }
-                        Item("Open…") { launchFlow { openPicked() } }
-                        Item("Recent ▸", closes = false) { recentList = true }
-                        Item("Save") { launchFlow { save() } }
-                        Item("Save As…") { launchFlow { saveAs() } }
-                        Item("Export PDF…") { launchFlow { exportPdf() } }
-                        Item("Share…") { launchFlow { share() } }
-                        Item("Close") { launchFlow { newDocument() } }
-                    }
-                }
+            DropdownMenuItem(text = { Text(text) }, onClick = { if (closes) file = false; run() })
+        Box {
+            Box(Modifier.height(40.dp).clickable { recentList = false; file = true }.padding(horizontal = 16.dp), contentAlignment = Alignment.Center) {
+                Text("File", fontSize = 14.sp, color = MaterialTheme.colorScheme.primary)
             }
-            Text(
-                (view?.title ?: "") + if (view?.dirty == true) " •" else "", Modifier.weight(1f).padding(horizontal = 8.dp),
-                maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.titleMedium,
-            )
-            Box {
-                IconButton(onClick = { more = true }) { Icon(Icons.Filled.MoreVert, "More") }
-                DropdownMenu(expanded = more, onDismissRequest = { more = false }) {
+            DropdownMenu(expanded = file, onDismissRequest = { file = false }) {
+                if (recentList) {
+                    Item("Back", closes = false) { recentList = false }
+                    recent.list().forEach { r -> Item(r.name) { openRecent(r) } }
+                } else {
+                    Item("New") { launchFlow { newDocument() } }
+                    Item("Open…") { launchFlow { openPicked() } }
+                    Item("Recent ▸", closes = false) { recentList = true }
+                    Item("Save") { launchFlow { save() } }
+                    Item("Save As…") { launchFlow { saveAs() } }
                     Item("Export PDF…") { launchFlow { exportPdf() } }
                     Item("Share…") { launchFlow { share() } }
+                    Item("Close") { launchFlow { newDocument() } }
                 }
             }
         }

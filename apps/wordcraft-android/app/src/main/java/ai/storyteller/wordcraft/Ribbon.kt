@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -31,6 +32,8 @@ import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.ContentCut
 import androidx.compose.material.icons.filled.ContentPaste
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.FormatAlignCenter
 import androidx.compose.material.icons.filled.FormatAlignJustify
 import androidx.compose.material.icons.automirrored.filled.FormatAlignLeft
@@ -129,13 +132,16 @@ private val STYLE_IDS = listOf("Normal", "Heading1", "Heading2", "Heading3")
  * The ribbon: the hand-made Home tab, then the catalog's tabs as plain text buttons. [doc] takes the
  * word being typed before a command moves the caret; [onRun] is told the label of the command about
  * to run, for the "isn't on the tablet yet" message when it only asks for a dialog.
+ * One 40 dp row holds [leading] (the File button), the scrolling tabs, [trailing] (the title) and the
+ * collapse chevron; the commands row sits under it and hides when collapsed.
  */
 @Composable
-fun Ribbon(engine: Engine, view: ViewState?, commands: JSONObject?, doc: DocumentView?, onRun: (String) -> Unit, modifier: Modifier = Modifier) {
+fun Ribbon(engine: Engine, view: ViewState?, commands: JSONObject?, doc: DocumentView?, onRun: (String) -> Unit, modifier: Modifier = Modifier, leading: @Composable () -> Unit = {}, trailing: @Composable () -> Unit = {}) {
     var fresh by remember { mutableStateOf<JSONObject?>(null) }
     val (cmds, entries) = remember(fresh, commands) { parseCommands(fresh ?: commands) }
     val tabs = remember(cmds, entries) { usableTabs(entries, cmds) }
     var tab by rememberSaveable { mutableStateOf("Home") }
+    var collapsed by rememberSaveable { mutableStateOf(false) }
     // A saved tab that the loaded catalog doesn't have (commands still loading) shows Home.
     val shown = if (tab == "Home" || tab in tabs) tab else "Home"
     val refresh: suspend () -> Unit = { engine.callAwait("commands")?.let { fresh = it } }
@@ -150,26 +156,34 @@ fun Ribbon(engine: Engine, view: ViewState?, commands: JSONObject?, doc: Documen
         scope.launch { engine.runAwait(id, params); onRun("") }
     }
 
-    Column(modifier.fillMaxWidth().height(112.dp).background(MaterialTheme.colorScheme.surfaceVariant)) {
-        Row(Modifier.fillMaxWidth().height(40.dp).horizontalScroll(rememberScrollState())) {
-            for (t in listOf("Home") + tabs.keys) {
-                val on = t == shown
-                Box(Modifier.fillMaxHeight().clickable { tab = t }.padding(horizontal = 16.dp).semantics { selected = on }, contentAlignment = Alignment.Center) {
-                    Text(t, fontSize = 14.sp, color = if (on) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface)
+    Column(modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceVariant)) {
+        Row(Modifier.fillMaxWidth().height(40.dp), verticalAlignment = Alignment.CenterVertically) {
+            leading()
+            Row(Modifier.weight(1f).fillMaxHeight().horizontalScroll(rememberScrollState())) {
+                for (t in listOf("Home") + tabs.keys) {
+                    val on = t == shown
+                    // Word: a second tap on the open tab folds the ribbon; another tab opens it.
+                    Box(Modifier.fillMaxHeight().clickable { if (on) collapsed = !collapsed else { tab = t; collapsed = false } }.padding(horizontal = 16.dp).semantics { selected = on }, contentAlignment = Alignment.Center) {
+                        Text(t, fontSize = 14.sp, color = if (on) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface)
+                    }
                 }
             }
+            Box(Modifier.widthIn(max = 280.dp).padding(horizontal = 8.dp)) { trailing() }
+            RibbonButton({ collapsed = !collapsed }, icon = if (collapsed) Icons.Filled.ExpandMore else Icons.Filled.ExpandLess, desc = if (collapsed) "Expand ribbon" else "Collapse ribbon")
         }
-        HorizontalDivider()
-        Row(Modifier.fillMaxWidth().weight(1f).horizontalScroll(rememberScrollState()), verticalAlignment = Alignment.CenterVertically) {
-            if (shown == "Home") {
-                HistoryGroup(view, ::act)
-                ClipboardGroup(doc, ::act)
-                FontGroup(view, ::act)
-                ParagraphGroup(::act)
-                StylesGroup(view, ::act)
-                EditingGroup(cmds.values, doc, refresh, ::act)
-            } else {
-                GeneratedTab(tabs[shown].orEmpty(), cmds, ::act)
+        if (!collapsed) {
+            HorizontalDivider()
+            Row(Modifier.fillMaxWidth().padding(vertical = 4.dp).horizontalScroll(rememberScrollState()), verticalAlignment = Alignment.CenterVertically) {
+                if (shown == "Home") {
+                    HistoryGroup(view, ::act)
+                    ClipboardGroup(doc, ::act)
+                    FontGroup(view, ::act)
+                    ParagraphGroup(::act)
+                    StylesGroup(view, ::act)
+                    EditingGroup(cmds.values, doc, refresh, ::act)
+                } else {
+                    GeneratedTab(tabs[shown].orEmpty(), cmds, ::act)
+                }
             }
         }
     }
@@ -191,31 +205,28 @@ internal fun RibbonButton(onClick: () -> Unit, modifier: Modifier = Modifier, ic
     }
 }
 
-/** A group: its buttons in a row, its name in small grey text underneath. */
+/** A group: its buttons in a row, then a vertical divider. */
 @Composable
-private fun Group(name: String, content: @Composable RowScope.() -> Unit) {
-    Column(Modifier.padding(horizontal = 6.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-        Row(verticalAlignment = Alignment.CenterVertically, content = content)
-        Text(name, color = Color.Gray, fontSize = 10.sp, maxLines = 1)
-    }
-    Box(Modifier.width(1.dp).height(48.dp).background(MaterialTheme.colorScheme.outlineVariant))
+private fun Group(content: @Composable RowScope.() -> Unit) {
+    Row(Modifier.padding(horizontal = 6.dp), verticalAlignment = Alignment.CenterVertically, content = content)
+    Box(Modifier.width(1.dp).height(32.dp).background(MaterialTheme.colorScheme.outlineVariant))
 }
 
 @Composable
 private fun GeneratedTab(groups: Map<String, List<Entry>>, cmds: Map<String, Cmd>, act: Act) {
-    for ((name, es) in groups) Group(name) {
+    for (es in groups.values) Group {
         for (e in es) RibbonButton({ act(e.id, JSONObject()) }, text = e.label, enabled = cmds[e.id]?.enabled != false)
     }
 }
 
 @Composable
-private fun HistoryGroup(view: ViewState?, act: Act) = Group("Undo") {
+private fun HistoryGroup(view: ViewState?, act: Act) = Group {
     RibbonButton({ act("edit.undo", JSONObject()) }, icon = Icons.AutoMirrored.Filled.Undo, desc = "Undo", enabled = view?.canUndo == true)
     RibbonButton({ act("edit.redo", JSONObject()) }, icon = Icons.AutoMirrored.Filled.Redo, desc = "Redo", enabled = view?.canRedo == true)
 }
 
 @Composable
-private fun ClipboardGroup(doc: DocumentView?, act: Act) = Group("Clipboard") {
+private fun ClipboardGroup(doc: DocumentView?, act: Act) = Group {
     RibbonButton({ doc?.commitComposition(); doc?.paste() }, icon = Icons.Filled.ContentPaste, desc = "Paste")
     RibbonButton({ act("edit.cut", JSONObject()) }, icon = Icons.Filled.ContentCut, desc = "Cut")
     RibbonButton({ act("edit.copy", JSONObject()) }, icon = Icons.Filled.ContentCopy, desc = "Copy")
@@ -234,7 +245,7 @@ private fun JSONObject.shown(key: String): String = when {
 @Composable
 private fun FontGroup(view: ViewState?, act: Act) {
     val f = view?.format ?: JSONObject()
-    Group("Font") {
+    Group {
         Picker(f.shown("font"), 150.dp, "Font", FONTS) { act("format.font", JSONObject().put("name", it)) }
         Picker(f.shown("size"), 64.dp, "Font size", SIZES.map { it.toString() }) { act("format.size", JSONObject().put("size", it.toInt())) }
         RibbonButton({ act("format.bold", JSONObject()) }, icon = Icons.Filled.FormatBold, desc = "Bold", checked = f.optBoolean("bold"))
@@ -262,7 +273,7 @@ private fun FontGroup(view: ViewState?, act: Act) {
 }
 
 @Composable
-private fun ParagraphGroup(act: Act) = Group("Paragraph") {
+private fun ParagraphGroup(act: Act) = Group {
     RibbonButton({ act("para.bullets", JSONObject()) }, icon = Icons.AutoMirrored.Filled.FormatListBulleted, desc = "Bullets")
     RibbonButton({ act("para.numbering", JSONObject()) }, icon = Icons.Filled.FormatListNumbered, desc = "Numbering")
     RibbonButton({ act("para.outdent", JSONObject()) }, icon = Icons.AutoMirrored.Filled.FormatIndentDecrease, desc = "Decrease indent")
@@ -275,14 +286,14 @@ private fun ParagraphGroup(act: Act) = Group("Paragraph") {
 }
 
 @Composable
-private fun StylesGroup(view: ViewState?, act: Act) = Group("Styles") {
+private fun StylesGroup(view: ViewState?, act: Act) = Group {
     val current = view?.format?.optString("style")
     STYLES.forEachIndexed { i, (label, id) -> RibbonButton({ act(id, JSONObject()) }, text = label, checked = current == STYLE_IDS[i]) }
 }
 
 /** "Search commands" (Word's Tell me): every command by label; a tap runs it with no params. */
 @Composable
-private fun EditingGroup(cmds: Collection<Cmd>, doc: DocumentView?, refresh: suspend () -> Unit, act: Act) = Group("Editing") {
+private fun EditingGroup(cmds: Collection<Cmd>, doc: DocumentView?, refresh: suspend () -> Unit, act: Act) = Group {
     var query by remember { mutableStateOf("") }
     // The list is closed by tapping away; typing or tapping the field opens it again. The query stays.
     var open by remember { mutableStateOf(true) }
