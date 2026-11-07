@@ -67,7 +67,11 @@ class DocumentView(context: Context, private val engine: Engine, private val sco
     private var caretOn = true
     private val blink = object : Runnable { override fun run() { caretOn = !caretOn; invalidate(); postDelayed(this, BLINK_MS) } }
 
-    init { setBackgroundColor(Color.rgb(0xE9, 0xEB, 0xEE)); isFocusable = true; isFocusableInTouchMode = true }
+    init {
+        setBackgroundColor(Color.rgb(0xE9, 0xEB, 0xEE)); isFocusable = true; isFocusableInTouchMode = true
+        // The default focus highlight is a dark overlay drawn over the whole view; the caret already shows focus.
+        defaultFocusHighlightEnabled = false
+    }
 
     fun update(view: ViewState?) {
         if (view == null || view === state) return
@@ -91,7 +95,7 @@ class DocumentView(context: Context, private val engine: Engine, private val sco
         restartBlink()
     }
     override fun onAttachedToWindow() { super.onAttachedToWindow(); requestFocus(); restartBlink() }
-    override fun onDetachedFromWindow() { removeCallbacks(blink); removeCallbacks(settle); super.onDetachedFromWindow() }
+    override fun onDetachedFromWindow() { removeCallbacks(blink); removeCallbacks(settle); zooming = false; super.onDetachedFromWindow() }
 
     private fun layoutPages() {
         val pages = state?.pages ?: return
@@ -106,7 +110,7 @@ class DocumentView(context: Context, private val engine: Engine, private val sco
 
     /** Room for the most pages the render window can hold (viewport straddle plus a neighbour each side), plus two spare. */
     private fun resizeCache(pages: List<PageInfo>) {
-        val pageBytes = pages.maxOf { Math.ceil((it.w * zoom).toDouble()) * Math.ceil((it.h * zoom).toDouble()) * 4 }
+        val pageBytes = pages.maxOf { val s = renderScale(it); Math.ceil((it.w * s).toDouble()) * Math.ceil((it.h * s).toDouble()) * 4 }
         val shortest = pages.minOf { it.h * zoom }
         val windowPages = Math.ceil((height + gap) / (shortest + gap).toDouble()) + 1 + 2
         cache.resize(((windowPages + 2) * pageBytes).coerceIn(MIN_CACHE_BYTES.toDouble(), Int.MAX_VALUE.toDouble()).toInt())
@@ -178,6 +182,15 @@ class DocumentView(context: Context, private val engine: Engine, private val sco
         else -> super.onKeyDown(keyCode, event)
     }
 
+    /**
+     * Px per point to render [page] at: [zoom], but never so large that one page bitmap passes
+     * [MAX_PAGE_PIXELS] (also keeps a large page under the bridge's 4096 px side cap). The bitmap is
+     * drawn stretched to the zoomed page rectangle.
+     * ponytail: past about 4 px/pt on a Letter page the text is upscaled and softer; tiles via the
+     * render crate's `render_area` are the upgrade.
+     */
+    private fun renderScale(page: PageInfo): Float = minOf(zoom, Math.sqrt(MAX_PAGE_PIXELS / (page.w.toDouble() * page.h)).toFloat())
+
     private fun cacheKey(i: Int, page: PageInfo, scale: Float) = "$i:${page.key}:$scale"
 
     override fun onDraw(canvas: Canvas) {
@@ -189,7 +202,7 @@ class DocumentView(context: Context, private val engine: Engine, private val sco
         val first = pageRects.indexOfFirst { it.bottom > scrollPxY }
         val last = pageRects.indexOfLast { it.top < scrollPxY + height }
         val window = if (first in 0..last) maxOf(0, first - 1)..minOf(pageRects.size - 1, last + 1) else IntRange.EMPTY
-        val wanted = window.mapNotNull { i -> pages.getOrNull(i)?.let { cacheKey(i, it, zoom) } }.toSet()
+        val wanted = window.mapNotNull { i -> pages.getOrNull(i)?.let { cacheKey(i, it, renderScale(it)) } }.toSet()
         // Pages that left the window: cancel their queued renders so they don't hold up edits on the engine thread.
         pending.keys.filter { it !in wanted }.forEach { pending.remove(it)?.cancel() }
         newest.keys.retainAll { it in window }
@@ -200,9 +213,10 @@ class DocumentView(context: Context, private val engine: Engine, private val sco
             val r = pageRects.getOrNull(i) ?: continue
             val page = pages.getOrNull(i) ?: continue
             canvas.drawRect(r.left + 2 * density, r.top + 2 * density, r.right + 2 * density, r.bottom + 2 * density, paperShadow)
-            val key = cacheKey(i, page, zoom)
+            val scale = renderScale(page)
+            val key = cacheKey(i, page, scale)
             // While zooming, the cache has nothing at the moving scale; draw the stretched newest bitmap and render once it settles.
-            val bmp = cache.get(key) ?: newestBitmap(i).also { if (!zooming) requestRender(i, key) }
+            val bmp = cache.get(key) ?: newestBitmap(i).also { if (!zooming) requestRender(i, key, scale) }
             if (bmp != null) canvas.drawBitmap(bmp, null, r, bitmapPaint) else canvas.drawRect(r, white)
         }
         drawOverlays(canvas)
@@ -213,9 +227,8 @@ class DocumentView(context: Context, private val engine: Engine, private val sco
     private val newest = HashMap<Int, Bitmap>()
     private fun newestBitmap(i: Int): Bitmap? = newest[i]?.takeIf { !it.isRecycled }
 
-    private fun requestRender(i: Int, key: String) {
+    private fun requestRender(i: Int, key: String, scale: Float) {
         if (key in failed || pending[key]?.isActive == true) return
-        val scale = zoom
         pending[key] = scope.launch {
             val bmp = engine.render(i, scale)
             pending.remove(key)
@@ -330,6 +343,8 @@ class DocumentView(context: Context, private val engine: Engine, private val sco
         const val MIN_CACHE_BYTES = 64 * 1024 * 1024
         const val MIN_ZOOM = 0.25f
         const val MAX_ZOOM = 5f
+        /** 8 megapixels: one page bitmap is at most 32 MB. */
+        const val MAX_PAGE_PIXELS = 8_000_000.0
         const val BLINK_MS = 530L
         const val SETTLE_MS = 150L
         const val DRAG_MS = 32L
