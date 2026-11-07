@@ -377,6 +377,8 @@ class DocumentView(context: Context, private val engine: Engine, internal val sc
 
     override fun onDraw(canvas: Canvas) {
         val pages = state?.pages ?: return
+        // Compose's AndroidView host doesn't clip: without this the pages, their shadow and the overlays draw over the top bar and ribbon.
+        canvas.clipRect(0, 0, width, height)
         if (scroller.computeScrollOffset()) { scrollPxX = scroller.currX.toFloat(); scrollPxY = scroller.currY.toFloat(); clampScroll(); postInvalidateOnAnimation() }
         // ponytail: whole-page bitmaps for the render window only (pages in view plus one neighbour
         // each side), with the cache sized to that window; tiles via the engine's `render_area` are

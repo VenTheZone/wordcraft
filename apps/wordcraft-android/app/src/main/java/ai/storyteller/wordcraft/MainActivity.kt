@@ -9,6 +9,7 @@ import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
+import androidx.activity.SystemBarStyle
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -86,7 +87,9 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        enableEdgeToEdge()
+        // The app is always light: light bar styles keep the status and nav icons dark when the system is in dark mode.
+        val light = SystemBarStyle.light(android.graphics.Color.TRANSPARENT, android.graphics.Color.TRANSPARENT)
+        enableEdgeToEdge(statusBarStyle = light, navigationBarStyle = light)
         // Collect before init: events wait in the engine's channel, but start the collector first anyway.
         lifecycleScope.launch(start = CoroutineStart.UNDISPATCHED) {
             engine.events.collect {
@@ -300,7 +303,11 @@ class MainActivity : ComponentActivity() {
 
     /** Keep read and write access to [uri] across restarts, so Recent can open it again. */
     private fun persist(uri: Uri) {
-        try { contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION) } catch (e: Exception) { /* some providers refuse; the file still opens and saves now */ }
+        val read = Intent.FLAG_GRANT_READ_URI_PERMISSION
+        try { contentResolver.takePersistableUriPermission(uri, read or Intent.FLAG_GRANT_WRITE_URI_PERMISSION) } catch (e: Exception) {
+            // A file picked read-only has no write grant to keep: keep the read, so Recent still opens it after a restart.
+            try { contentResolver.takePersistableUriPermission(uri, read) } catch (e2: Exception) { /* some providers refuse; the file still opens now */ }
+        }
     }
 
     private fun addRecent(uri: Uri, name: String) = recent.add(uri.toString(), name).forEach { release(it) }
