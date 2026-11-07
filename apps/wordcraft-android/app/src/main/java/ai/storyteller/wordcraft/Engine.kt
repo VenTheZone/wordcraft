@@ -97,14 +97,25 @@ class Engine {
         }
     }
 
+    /** A number the engine sent, or NaN when missing or not a number; callers drop what isn't finite. */
+    private fun JSONObject.num(key: String) = optDouble(key, Double.NaN).toFloat()
+
     private fun parseView(o: JSONObject): ViewState? = try {
         val pages = o.optJSONArray("pages") ?: JSONArray()
         ViewState(
             docId = o.optLong("docId"), rev = o.optLong("rev"), dirty = o.optBoolean("dirty"), title = o.optString("title"),
             canUndo = o.optBoolean("canUndo"), canRedo = o.optBoolean("canRedo"), status = o.optString("status"),
-            pages = (0 until pages.length()).mapNotNull { i -> pages.optJSONObject(i)?.let { PageInfo(it.optDouble("w").toFloat(), it.optDouble("h").toFloat(), it.optString("key")) } },
-            caret = o.optJSONObject("caret")?.let { CaretInfo(it.optInt("page"), it.optDouble("x").toFloat(), it.optDouble("top").toFloat(), it.optDouble("height").toFloat()) },
-            selection = o.optJSONArray("selection")?.let { a -> (0 until a.length()).mapNotNull { i -> a.optJSONObject(i)?.let { Box(it.optInt("page"), it.optDouble("x").toFloat(), it.optDouble("y").toFloat(), it.optDouble("w").toFloat(), it.optDouble("h").toFloat()) } } } ?: emptyList(),
+            pages = (0 until pages.length()).mapNotNull { i ->
+                pages.optJSONObject(i)?.let { PageInfo(it.num("w"), it.num("h"), it.optString("key")) }?.takeIf { it.w.isFinite() && it.h.isFinite() && it.w > 0f && it.h > 0f }
+            },
+            caret = o.optJSONObject("caret")?.let { CaretInfo(it.optInt("page"), it.num("x"), it.num("top"), it.num("height")) }
+                ?.takeIf { it.x.isFinite() && it.top.isFinite() && it.height.isFinite() },
+            selection = o.optJSONArray("selection")?.let { a ->
+                (0 until a.length()).mapNotNull { i ->
+                    a.optJSONObject(i)?.let { Box(it.optInt("page"), it.num("x"), it.num("y"), it.num("w"), it.num("h")) }
+                        ?.takeIf { it.x.isFinite() && it.y.isFinite() && it.w.isFinite() && it.h.isFinite() }
+                }
+            } ?: emptyList(),
             format = o.optJSONObject("format") ?: JSONObject(),
             ime = o.optJSONObject("ime")?.let { ImeText(it.optString("text"), it.optInt("cursor"), it.optInt("anchor"), it.optString("para")) },
         )
