@@ -38,20 +38,38 @@ internal fun snapUp(text: String, i: Int): Int {
 }
 
 /**
+ * The composing region [start, end) as code points before and after [caret] in [text], or null when
+ * the caret is outside it. Either end may be reversed or inside a surrogate pair.
+ */
+internal fun regionAround(text: String, caret: Int, start: Int, end: Int): Pair<Int, Int>? {
+    val c = caret.coerceIn(0, text.length)
+    val s = snapDown(text, minOf(start, end)); val e = snapUp(text, maxOf(start, end))
+    if (c < s || c > e) return null
+    return Pair(text.codePointCount(s, c), text.codePointCount(c, e))
+}
+
+/**
  * The soft keyboard's side of the document: text arrives as commands on the engine, the way the
  * desktop keyboard's keys do. The engine owns the text; this connection only keeps [ctx], the
  * paragraph around the caret, so the input method's questions are answered on the UI thread without
  * waiting for the engine. [ctx] is updated at once after an edit and replaced by the engine's own
  * once every edit this connection sent has been applied.
  *
- * The composing text lives in [DocumentView.preedit], not in the engine. To the keyboard it is part
- * of the text, right before the caret, so every answer here goes through [effective].
+ * Composing text typed through [setComposingText] lives in [DocumentView.preedit], not in the engine.
+ * To the keyboard it is part of the text, right before the caret, so every answer here goes through
+ * [effective]. A region the keyboard marks with [setComposingRegion] (the word touching the caret,
+ * which Gboard asks for on every start and cursor move) stays in the document; only its place is
+ * remembered, and it is deleted when the keyboard replaces it with [setComposingText] or [commitText].
  *
  * Every override catches everything and answers with a safe default: a failure in here must never
  * take the app down.
  */
 class DocInputConnection(private val view: DocumentView, private val engine: Engine) : BaseInputConnection(view, false) {
     var ctx: ImeText? = null
+
+    /** A composing region the keyboard marked: code points before and after the caret, valid while [ctx] is still [at]. */
+    private class Region(val before: Int, val after: Int, val at: ImeText)
+    private var region: Region? = null
 
     /** Edits sent to the engine and not yet applied; while any, the engine's view is older than [ctx]. */
     private var pending = 0
@@ -117,34 +135,43 @@ class DocInputConnection(private val view: DocumentView, private val engine: Eng
         commit(t)
     }
 
+    /** The remembered region leaves the document: the keyboard is about to put its replacement there. */
+    private fun takeRegion() {
+        val r = region ?: return
+        region = null
+        val c = ctx ?: return
+        if (c != r.at) return // the caret moved or the text changed since: the region is stale
+        deleteCodePoints(c, r.before, r.after, false)
+    }
+
     override fun commitText(text: CharSequence?, newCursorPosition: Int): Boolean = safe(false) {
         view.preedit = ""
+        takeRegion()
         commit(text?.toString().orEmpty())
         true
     }
 
     override fun setComposingText(text: CharSequence?, newCursorPosition: Int): Boolean = safe(false) {
+        takeRegion()
         view.preedit = text?.toString().orEmpty()
         true
     }
 
-    override fun finishComposingText(): Boolean = safe(false) { flush(); true }
+    override fun finishComposingText(): Boolean = safe(false) { region = null; flush(); true }
 
     /**
-     * Make [start]..[end] the composing text. Only a region that ends at the caret can be: its text
-     * leaves the document and becomes the pre-edit, which commit puts back. Anything else is refused
-     * and the keyboard starts over.
+     * Remember [start]..[end] as the composing region. Nothing is sent to the engine: the text stays in
+     * the document until the keyboard replaces it. Only a collapsed caret inside the region is
+     * supported; anything else is refused, and the keyboard is restarted at most once for the same
+     * text, so a keyboard that asks again on every start cannot loop.
      */
     override fun setComposingRegion(start: Int, end: Int): Boolean = safe(false) {
         flush()
+        region = null
         val c = ctx
-        if (c == null) { view.restartIme(); return@safe false }
-        val s = snapDown(c.text, minOf(start, end)); val e = snapUp(c.text, maxOf(start, end))
-        if (selStart(c) != selEnd(c) || e != selEnd(c)) { view.restartIme(); return@safe false }
-        if (s == e) return@safe true
-        val region = c.text.substring(s, e)
-        deleteCodePoints(c, c.text.codePointCount(s, e), 0, true)
-        view.preedit = region
+        val r = if (c == null || selStart(c) != selEnd(c)) null else regionAround(c.text, c.cursor, start, end)
+        if (c == null || r == null) { view.restartImeOnce(c); return@safe false }
+        if (r.first + r.second > 0) region = Region(r.first, r.second, c)
         true
     }
 

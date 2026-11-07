@@ -28,6 +28,8 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import org.json.JSONObject
 
+private object NoRestart
+
 /**
  * The document: pages in a vertical stack, drawn from engine rasters, with the caret, selection
  * and input on top (A4, A5). Page geometry from the engine is in points; [zoom] is px per point.
@@ -122,9 +124,9 @@ class DocumentView(context: Context, private val engine: Engine, internal val sc
         val old = imeSent; val oldDoc = imeDoc
         if (ni == old && st.docId == oldDoc) return
         val restart = ni == null || old == null || ni.para != old.para || st.docId != oldDoc
-        if (restart && preedit.isNotEmpty() && c != null) {
+        if (restart && preedit.isNotEmpty() && c != null && st.docId == oldDoc) {
             // The word being typed goes into the document before the keyboard starts over. Its job
-            // runs syncIme again when it is done.
+            // runs syncIme again when it is done. Another document gets nothing: it is dropped below.
             c.finishComposingText()
             return
         }
@@ -139,6 +141,16 @@ class DocumentView(context: Context, private val engine: Engine, internal val sc
             if (preedit.isEmpty()) imm.updateSelection(this, s0, maxOf(ni.cursor, ni.anchor), -1, -1)
             else imm.updateSelection(this, s0 + preedit.length, s0 + preedit.length, s0, s0 + preedit.length)
         }
+    }
+
+    /** What [restartImeOnce] last restarted for. */
+    private var restartMark: Any? = NoRestart
+
+    /** [restartIme], but not again for the same [ctx]: the new keyboard session will ask the same thing. */
+    internal fun restartImeOnce(ctx: ImeText?) {
+        if (restartMark == ctx) return
+        restartMark = ctx
+        restartIme()
     }
 
     /** Ask the keyboard to start over, after the call it is in is done. */

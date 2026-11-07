@@ -54,13 +54,15 @@ class Engine {
     private fun fail(message: String): JSONObject? { _events.trySend(EngineEvent.Error(message)); return null }
 
     /** On the engine thread: one call, its `ok` payload, or null after reporting the error. */
-    internal fun callNow(method: String, params: JSONObject = JSONObject()): JSONObject? {
-        val reply = try { JSONObject(Native.call(method, params.toString())) } catch (e: Throwable) { return fail(e.message ?: "The engine failed") }
-        if (reply.has("error")) return fail(reply.optString("error"))
-        val ok = reply.opt("ok")
-        if (ok is JSONObject) absorb(ok)
-        return ok as? JSONObject ?: JSONObject().put("value", ok)
-    }
+    internal fun callNow(method: String, params: JSONObject = JSONObject()): JSONObject? = try {
+        val reply = JSONObject(Native.call(method, params.toString()))
+        if (reply.has("error")) fail(reply.optString("error"))
+        else {
+            val ok = reply.opt("ok")
+            if (ok is JSONObject) absorb(ok)
+            ok as? JSONObject ?: JSONObject().put("value", ok)
+        }
+    } catch (e: Throwable) { fail(e.message ?: "The engine failed") } // absorb included: nothing escapes into the caller's coroutine
 
     /** Take what an edit reply carries: the view, the app requests, the clipboard, the error. */
     private fun absorb(ok: JSONObject) {

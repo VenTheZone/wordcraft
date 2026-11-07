@@ -1,6 +1,7 @@
 package ai.storyteller.wordcraft
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Test
 
 class CodePointsTest {
@@ -32,5 +33,17 @@ class CodePointsTest {
         assertEquals(1, snapDown("a😀b", 1))
         assertEquals(0, snapDown("", 4))
         assertEquals(0, snapUp("", 4))
+    }
+
+    @Test fun region() {
+        assertEquals(Pair(5, 0), regionAround("hello world", 5, 0, 5)) // ends at the caret
+        assertEquals(Pair(2, 3), regionAround("hello world", 2, 0, 5)) // around the caret
+        assertEquals(Pair(0, 5), regionAround("hello world", 6, 6, 11)) // starts at the caret
+        assertEquals(Pair(0, 0), regionAround("hello world", 3, 3, 3)) // empty, at the caret
+        assertNull(regionAround("hello world", 8, 0, 5)) // caret outside
+        assertNull(regionAround("hello world", 2, 3, 5))
+        assertEquals(Pair(2, 3), regionAround("hello world", 2, 5, 0)) // reversed ends
+        assertEquals(Pair(2, 0), regionAround("a😀b", 3, 0, 3)) // a surrogate pair is one code point
+        assertEquals(Pair(1, 1), regionAround("a😀b", 3, 2, 4)) // an end inside the pair grows to the pair
     }
 }
