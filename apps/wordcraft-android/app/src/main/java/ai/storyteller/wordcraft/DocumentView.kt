@@ -20,6 +20,7 @@ import android.view.View
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputConnection
 import android.view.inputmethod.InputMethodManager
+import android.widget.Toast
 import android.text.InputType
 import android.widget.OverScroller
 import kotlinx.coroutines.CoroutineScope
@@ -120,13 +121,28 @@ class DocumentView(context: Context, private val engine: Engine, internal val sc
         c?.ctx = ni
         val old = imeSent; val oldDoc = imeDoc
         if (ni == old && st.docId == oldDoc) return
+        val restart = ni == null || old == null || ni.para != old.para || st.docId != oldDoc
+        if (restart && preedit.isNotEmpty() && c != null) {
+            // The word being typed goes into the document before the keyboard starts over. Its job
+            // runs syncIme again when it is done.
+            c.finishComposingText()
+            return
+        }
         imeSent = ni; imeDoc = st.docId
         val imm = context.getSystemService(InputMethodManager::class.java) ?: return
-        if (ni == null || old == null || ni.para != old.para || st.docId != oldDoc) {
+        if (restart) {
             preedit = ""
             imm.restartInput(this)
-        } else imm.updateSelection(this, minOf(ni.cursor, ni.anchor), maxOf(ni.cursor, ni.anchor), -1, -1)
+        } else if (ni != null && old != null) {
+            // While composing, the keyboard counts the pre-edit as text: the caret is after it, and it is the composing range.
+            val s0 = minOf(ni.cursor, ni.anchor)
+            if (preedit.isEmpty()) imm.updateSelection(this, s0, maxOf(ni.cursor, ni.anchor), -1, -1)
+            else imm.updateSelection(this, s0 + preedit.length, s0 + preedit.length, s0, s0 + preedit.length)
+        }
     }
+
+    /** Ask the keyboard to start over, after the call it is in is done. */
+    internal fun restartIme() { post { context.getSystemService(InputMethodManager::class.java)?.restartInput(this) } }
 
     /** Solid caret now; blinking resumes after [BLINK_MS] if the view is focused and the selection is collapsed. */
     private fun restartBlink() {
@@ -187,8 +203,12 @@ class DocumentView(context: Context, private val engine: Engine, internal val sc
     }
 
     private fun placeAt(page: Int, x: Float, y: Float, extend: Boolean = false) {
-        // The caret moves away from the word being composed: drop it and let the keyboard start over.
-        if (preedit.isNotEmpty()) { preedit = ""; context.getSystemService(InputMethodManager::class.java)?.restartInput(this) }
+        // The caret moves away from the word being composed: put the word in the document first (its
+        // job is queued ahead of the caret move below), then let the keyboard start over.
+        if (preedit.isNotEmpty()) {
+            conn?.finishComposingText() ?: run { preedit = "" }
+            context.getSystemService(InputMethodManager::class.java)?.restartInput(this)
+        }
         engine.run("caret.set", JSONObject().put("page", page).put("x", x.toDouble()).put("y", y.toDouble()).put("extend", extend))
     }
 
@@ -243,6 +263,8 @@ class DocumentView(context: Context, private val engine: Engine, internal val sc
      * commits as text never arrive here.
      */
     private fun hardwareKey(k: Int, e: KeyEvent): Boolean {
+        // A key that edits or moves ends the word being composed; a bare modifier doesn't.
+        if (preedit.isNotEmpty() && !KeyEvent.isModifierKey(k)) conn?.finishComposingText()
         val ctrl = e.isCtrlPressed || e.isMetaPressed; val shift = e.isShiftPressed
         val extend = JSONObject().put("extend", shift)
         when (k) {
@@ -307,11 +329,22 @@ class DocumentView(context: Context, private val engine: Engine, internal val sc
         else -> e.getUnicodeChar(0).takeIf { it in 33..0x10FFFF && it and KeyCharacterMap.COMBINING_ACCENT_MASK == 0 }?.let { String(Character.toChars(it)).uppercase() }
     }
 
-    /** Ctrl+V: the system clipboard's text. An empty paste tells the engine to use its own last copy. */
+    /**
+     * Ctrl+V: the system clipboard's text, at most [MAX_PASTE] characters. An empty paste tells the
+     * engine to use its own last copy. A clip item that is a content URI is not opened: that would be
+     * file I/O on the UI thread.
+     */
     private fun paste(): Boolean {
-        val text = try {
-            context.getSystemService(ClipboardManager::class.java)?.primaryClip?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.coerceToText(context)?.toString().orEmpty()
+        var text = try {
+            val item = context.getSystemService(ClipboardManager::class.java)?.primaryClip?.takeIf { it.itemCount > 0 }?.getItemAt(0)
+            item?.text?.toString() ?: item?.takeIf { it.uri == null }?.coerceToText(context)?.toString().orEmpty()
         } catch (e: Exception) { "" }
+        if (text.length > MAX_PASTE) {
+            var cut = MAX_PASTE
+            if (Character.isHighSurrogate(text[cut - 1])) cut -= 1
+            text = text.substring(0, cut)
+            Toast.makeText(context, "Pasted text was cut at 1 MB", Toast.LENGTH_SHORT).show()
+        }
         engine.call("paste", JSONObject().put("text", text))
         return true
     }
@@ -479,6 +512,7 @@ class DocumentView(context: Context, private val engine: Engine, internal val sc
         const val MAX_ZOOM = 5f
         /** 8 megapixels: one page bitmap is at most 32 MB. */
         const val MAX_PAGE_PIXELS = 8_000_000.0
+        const val MAX_PASTE = 1 shl 20
         const val BLINK_MS = 530L
         const val SETTLE_MS = 150L
         const val DRAG_MS = 32L

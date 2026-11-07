@@ -54,7 +54,7 @@ class Engine {
     private fun fail(message: String): JSONObject? { _events.trySend(EngineEvent.Error(message)); return null }
 
     /** On the engine thread: one call, its `ok` payload, or null after reporting the error. */
-    private fun callNow(method: String, params: JSONObject): JSONObject? {
+    internal fun callNow(method: String, params: JSONObject = JSONObject()): JSONObject? {
         val reply = try { JSONObject(Native.call(method, params.toString())) } catch (e: Throwable) { return fail(e.message ?: "The engine failed") }
         if (reply.has("error")) return fail(reply.optString("error"))
         val ok = reply.opt("ok")
@@ -75,7 +75,12 @@ class Engine {
     }
     fun run(id: String, params: JSONObject = JSONObject(), ime: Boolean = false) { scope.launch { runNow(id, params, ime) } }
     suspend fun runAwait(id: String, params: JSONObject = JSONObject(), ime: Boolean = false): JSONObject? = withContext(dispatcher) { runNow(id, params, ime) }
-    private fun runNow(id: String, params: JSONObject, ime: Boolean) = callNow("run", JSONObject().put("id", id).put("params", params).put("ime", ime))
+    internal fun runNow(id: String, params: JSONObject = JSONObject(), ime: Boolean = false) = callNow("run", JSONObject().put("id", id).put("params", params).put("ime", ime))
+    /**
+     * Run [block] as one job on the engine thread. The job is queued as soon as this is called, and
+     * nothing queued later runs in the middle of it. [block] calls [runNow] and [callNow].
+     */
+    internal suspend fun job(block: Engine.() -> Unit) = withContext(dispatcher) { block() }
     fun call(method: String, params: JSONObject = JSONObject()) { scope.launch { callNow(method, params) } }
     suspend fun callAwait(method: String, params: JSONObject = JSONObject()): JSONObject? = withContext(dispatcher) { callNow(method, params) }
 
