@@ -694,6 +694,13 @@ pub fn status_bar(app: &mut WordApp, ui: &mut Ui) {
                     if app.session.prefs.overtype && st(ui, tl!("Overtype")).on_hover_text(tl!("Click to switch back to inserting")).clicked() {
                         let _ = app.run("text.overtype", json!({"value": false}));
                     }
+                    // Pen mode: one click to write with the pen, another to put it down (Esc does too).
+                    let pen_on = app.session.view.draw.mode.pen().is_some();
+                    let pen_tip = if pen_on { tl!("Click to put the pen down (Esc)") } else { tl!("Write with the pen (⌘⌥⇧P)") };
+                    if st_icon(ui, Some("pen"), if pen_on { tl!("Pen: On") } else { tl!("Pen") }).on_hover_text(pen_tip).clicked() {
+                        app.canvas.ink = None;
+                        let _ = app.run("draw.togglePen", json!({}));
+                    }
                     // The message is drawn where the row is now; the controls on the right are laid
                     // out first, so the message can be shortened to the space they leave (#2402): a
                     // long one (the path of a file that isn't there) must not be drawn over the

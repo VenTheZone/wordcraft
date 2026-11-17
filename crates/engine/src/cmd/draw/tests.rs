@@ -73,6 +73,20 @@ fn the_eraser_removes_the_stroke_under_the_point_and_hide_ink_hides_it() {
     assert_eq!(s.view.draw.mode, super::DrawMode::Select);
 }
 
+#[test]
+fn toggle_pen_picks_the_pen_up_and_puts_it_down() {
+    let mut s = session();
+    s.run("draw.togglePen", &json!({})).unwrap();
+    assert_eq!(s.view.draw.mode, super::DrawMode::Pen(InkTool::Pen));
+    s.run("draw.togglePen", &json!({})).unwrap();
+    assert_eq!(s.view.draw.mode, super::DrawMode::Select);
+    // From the eraser it goes to the pen, not back to selecting.
+    s.run("draw.eraser", &json!({})).unwrap();
+    s.run("draw.togglePen", &json!({})).unwrap();
+    assert_eq!(s.view.draw.mode, super::DrawMode::Pen(InkTool::Pen));
+    assert_eq!(crate::cmd::registry().by_shortcut("Mod+Alt+Shift+P").map(|c| c.id), Some("draw.togglePen"));
+}
+
 /// #445: a turned stroke is erased where it is drawn, not where it was before the turn.
 #[test]
 fn a_rotated_stroke_is_erased_where_it_is_drawn() {

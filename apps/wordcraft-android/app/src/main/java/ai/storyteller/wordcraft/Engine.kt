@@ -30,6 +30,8 @@ data class ViewState(
     val format: JSONObject, val ime: ImeText?,
     /** The page is drawn dark (white text on a dark page): the overlays on it change colour. */
     val dark: Boolean,
+    /** Pen mode is on (Draw › Pen): a drag on the page draws ink instead of scrolling. */
+    val pen: Boolean = false,
 )
 
 sealed interface EngineEvent {
@@ -162,7 +164,7 @@ class Engine {
             } ?: emptyList(),
             format = o.optJSONObject("format") ?: JSONObject(),
             ime = o.optJSONObject("ime")?.let { ImeText(it.optString("text"), it.optInt("cursor"), it.optInt("anchor"), it.optString("para")) },
-            dark = o.optBoolean("dark"),
+            dark = o.optBoolean("dark"), pen = o.optBoolean("pen"),
         )
     } catch (e: Exception) { null }
 }

@@ -198,7 +198,7 @@ fn view(app: &mut App) -> Value {
     json!({
         "docId": s.document_id(), "rev": s.rev(), "dirty": s.dirty, "title": title,
         "canUndo": s.can_undo(), "canRedo": s.can_redo(), "status": s.status,
-        "dark": s.dark_page(), "pages": pages, "caret": caret, "selection": selection, "format": format, "ime": ime,
+        "dark": s.dark_page(), "pen": s.view.draw.mode.pen().is_some(), "pages": pages, "caret": caret, "selection": selection, "format": format, "ime": ime,
     })
 }
 
@@ -466,6 +466,15 @@ mod tests {
         let again = ok("init", json!({"locale": "en-US"}));
         assert_eq!(again["fresh"], false, "a recreated activity finds the session");
         assert_eq!(again["view"]["dirty"], true, "and its document");
+    }
+
+    #[test]
+    fn the_view_says_whether_the_pen_is_picked_up() {
+        let _g = TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        assert_eq!(ok("init", json!({"reset": true}))["view"]["pen"], false);
+        let on = ok("run", json!({"id": "draw.togglePen", "params": {}}));
+        assert_eq!((on["error"].clone(), on["view"]["pen"].clone()), (Value::Null, json!(true)));
+        assert_eq!(ok("run", json!({"id": "draw.togglePen", "params": {}}))["view"]["pen"], false);
     }
 
     #[test]

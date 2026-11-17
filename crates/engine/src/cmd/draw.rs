@@ -219,6 +219,13 @@ pub fn specs() -> Vec<CommandSpec> {
         .params(r#"{"page"?: n, "x"?: pt, "y"?: pt}  (no point: use the eraser; a point: delete the ink stroke there)"#)
         .pure(),
         CommandSpec::new("draw.pen", "Pen", "Draw › Pens", |s, v| pen(s, v, InkTool::Pen)).params(PEN_PARAMS).pure(),
+        // One key or click to start writing with the pen, the same again to put it down.
+        CommandSpec::new("draw.togglePen", "Toggle Pen", "Draw › Pens", |s, _| {
+            s.view.draw.mode = if s.view.draw.mode.pen().is_some() { DrawMode::Select } else { DrawMode::Pen(InkTool::Pen) };
+            state(s)
+        })
+        .key("Mod+Alt+Shift+P")
+        .pure(),
         CommandSpec::new("draw.pencil", "Pencil", "Draw › Pens", |s, v| pen(s, v, InkTool::Pencil)).params(PEN_PARAMS).pure(),
         CommandSpec::new("draw.highlighter", "Highlighter", "Draw › Pens", |s, v| pen(s, v, InkTool::Highlighter)).params(PEN_PARAMS).pure(),
         CommandSpec::new("draw.addPen", "Add Pen", "Draw › Pens", add_pen)

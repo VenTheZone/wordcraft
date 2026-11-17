@@ -32,6 +32,7 @@ import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.ContentCut
 import androidx.compose.material.icons.filled.ContentPaste
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.FormatAlignCenter
@@ -169,6 +170,8 @@ fun Ribbon(engine: Engine, view: ViewState?, commands: JSONObject?, doc: Documen
                 }
             }
             Box(Modifier.widthIn(max = 280.dp).padding(horizontal = 8.dp)) { trailing() }
+            // Pen mode, one tap from any tab: drags on the page draw ink until it is tapped again.
+            RibbonButton({ act("draw.togglePen") }, icon = Icons.Filled.Edit, desc = "Pen", checked = view?.pen == true)
             RibbonButton({ collapsed = !collapsed }, icon = if (collapsed) Icons.Filled.ExpandMore else Icons.Filled.ExpandLess, desc = if (collapsed) "Expand ribbon" else "Collapse ribbon")
         }
         if (!collapsed) {

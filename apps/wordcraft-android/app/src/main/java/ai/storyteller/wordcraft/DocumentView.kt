@@ -6,6 +6,7 @@ import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
+import android.graphics.PointF
 import android.graphics.Rect
 import android.graphics.RectF
 import android.os.SystemClock
@@ -26,6 +27,7 @@ import android.widget.OverScroller
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
+import org.json.JSONArray
 import org.json.JSONObject
 
 private object NoRestart
@@ -66,6 +68,7 @@ class DocumentView(context: Context, private val engine: Engine, internal val sc
     private val selectionPaint = Paint()
     private val caretPaint = Paint()
     private val preeditPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { strokeWidth = 1.5f * density }
+    private val inkPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; strokeCap = Paint.Cap.ROUND; strokeJoin = Paint.Join.ROUND }
 
     /** The input method's uncommitted text ([DocInputConnection] sets it); drawn at the caret, never sent to the engine. */
     var preedit: String = ""
@@ -427,7 +430,7 @@ class DocumentView(context: Context, private val engine: Engine, internal val sc
             val bmp = engine.render(i, scale)
             pending.remove(key)
             if (bmp == null) { failed.add(key); return@launch }
-            cache.put(key, bmp); newest[i] = bmp; invalidate()
+            cache.put(key, bmp); newest[i] = bmp; if (inkSent) { inkPts.clear(); inkSent = false }; invalidate()
         }
     }
 
@@ -443,6 +446,10 @@ class DocumentView(context: Context, private val engine: Engine, internal val sc
             if (bottom < scrollPxY || top > scrollPxY + height) continue
             val left = r.left + b.x * zoom
             canvas.drawRect(left, top, left + b.w * zoom, bottom, selectionPaint)
+        }
+        inkRect()?.let { r ->
+            inkPaint.color = ink; inkPaint.strokeWidth = 1.5f * zoom
+            for (i in 1 until inkPts.size) canvas.drawLine(r.left + inkPts[i - 1].x * zoom, r.top + inkPts[i - 1].y * zoom, r.left + inkPts[i].x * zoom, r.top + inkPts[i].y * zoom, inkPaint)
         }
         val c = st.caret ?: return
         val r = pageRects.getOrNull(c.page) ?: return
@@ -475,6 +482,44 @@ class DocumentView(context: Context, private val engine: Engine, internal val sc
         if (last != null && last.first == p.first && Math.hypot((p.second - last.second).toDouble(), (p.third - last.third).toDouble()) <= 1.0) return
         lastDragMs = now; lastDrag = p
         placeAt(p.first, p.second, p.third, extend = true)
+    }
+
+    /** The stroke being drawn in pen mode, in page points on [inkPage]. Kept after the finger lifts ([inkSent]) until the page is drawn again with it in. */
+    private val inkPts = ArrayList<PointF>()
+    private var inkPage = -1
+    private var inkSent = false
+    private fun inkRect() = if (inkPts.isEmpty()) null else pageRects.getOrNull(inkPage)
+
+    private fun inkAdd(r: RectF, x: Float, y: Float) {
+        val px = ((x + scrollPxX - r.left) / zoom).coerceIn(0f, r.width() / zoom); val py = ((y + scrollPxY - r.top) / zoom).coerceIn(0f, r.height() / zoom)
+        val last = inkPts.lastOrNull()
+        if ((last == null || Math.hypot((px - last.x).toDouble(), (py - last.y).toDouble()) >= 0.5) && inkPts.size < MAX_INK_POINTS) inkPts.add(PointF(px, py))
+    }
+
+    /** Pen mode: one pointer draws a stroke on the page it started on, sent to the engine when it lifts. True when the event was taken. */
+    private fun drawInk(e: MotionEvent): Boolean {
+        if (e.actionMasked == MotionEvent.ACTION_DOWN) {
+            inkPts.clear(); inkSent = false
+            val p = toPage(e.x, e.y)
+            inkPage = p?.first ?: -1
+            if (p == null) return false
+            preedit.takeIf { it.isNotEmpty() }?.let { conn?.finishComposingText() }
+        }
+        val r = pageRects.getOrNull(inkPage) ?: return false
+        when (e.actionMasked) {
+            MotionEvent.ACTION_DOWN, MotionEvent.ACTION_MOVE, MotionEvent.ACTION_UP -> {
+                for (h in 0 until e.historySize) inkAdd(r, e.getHistoricalX(h), e.getHistoricalY(h))
+                inkAdd(r, e.x, e.y)
+                if (e.actionMasked == MotionEvent.ACTION_UP && inkPts.isNotEmpty()) {
+                    val pts = JSONArray().also { a -> inkPts.forEach { a.put(JSONArray().put(it.x.toDouble()).put(it.y.toDouble())) } }
+                    inkSent = true
+                    engine.run("draw.stroke", JSONObject().put("page", inkPage).put("points", pts))
+                }
+            }
+            MotionEvent.ACTION_CANCEL -> inkPts.clear()
+        }
+        invalidate()
+        return true
     }
 
     private val gestures = GestureDetector(context, object : GestureDetector.SimpleOnGestureListener() {
@@ -520,11 +565,13 @@ class DocumentView(context: Context, private val engine: Engine, internal val sc
                 val cancel = MotionEvent.obtain(event).apply { action = MotionEvent.ACTION_CANCEL }
                 gestures.onTouchEvent(cancel); cancel.recycle()
                 dragSelecting = false; ignoreUntilDown = true
+                if (!inkSent) inkPts.clear()
             }
             return true
         }
         if (event.actionMasked == MotionEvent.ACTION_DOWN) ignoreUntilDown = false
         if (ignoreUntilDown) return true
+        if (state?.pen == true && !dragSelecting && drawInk(event)) return true
         if (dragSelecting) {
             when (event.actionMasked) {
                 MotionEvent.ACTION_MOVE -> dragTo(event, force = false)
@@ -546,5 +593,7 @@ class DocumentView(context: Context, private val engine: Engine, internal val sc
         const val BLINK_MS = 530L
         const val SETTLE_MS = 150L
         const val DRAG_MS = 32L
+        /** The engine takes at most 5000 points in one stroke. */
+        const val MAX_INK_POINTS = 5000
     }
 }
