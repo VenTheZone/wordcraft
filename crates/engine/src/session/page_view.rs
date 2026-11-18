@@ -26,10 +26,18 @@ impl Session {
         opts.display.revisions = self.prefs.markup.clone();
         opts.dark = self.dark_page();
         opts.dark_paper = wordcraft_render::DARK_PAPER;
-        // In Read Mode the Page color sets the paper.
+        // A screen tint (View › Paper color) paints the page, unless the page is drawn dark.
+        if !opts.dark {
+            opts.paper = self.prefs.paper_color.color();
+        }
+        // In Read Mode the Page color sets the paper: Sepia and Inverse as before, None the
+        // selected screen tint (white without one).
         if self.view.read_mode {
-            let color = self.view.read_page_color;
-            opts.read_paper = Some(if color == ReadPageColor::Sepia { wordcraft_render::SEPIA_PAPER } else { wordcraft_doc::props::Rgb::WHITE });
+            opts.read_paper = Some(match self.view.read_page_color {
+                ReadPageColor::None => self.prefs.paper_color.color(),
+                ReadPageColor::Sepia => wordcraft_render::SEPIA_PAPER,
+                ReadPageColor::Inverse => wordcraft_doc::props::Rgb::WHITE,
+            });
         }
         opts.display.dim_header = !dim_body;
         opts.display.dim_body = dim_body;
@@ -43,7 +51,7 @@ impl Session {
         let mut h = std::collections::hash_map::DefaultHasher::new();
         let v = &self.view;
         (v.marks, self.prefs.marks, v.show_markup, v.dark_mode, wordcraft_render::DARK_PAPER, v.hide_ink, v.draw.replay).hash(&mut h);
-        (v.read_mode, v.read_page_color).hash(&mut h);
+        (v.read_mode, v.read_page_color, self.prefs.paper_color).hash(&mut h);
         self.prefs.markup.hash(&mut h);
         dim_body.hash(&mut h);
         format!("{:?}{:?}{:?}", self.doc.settings.page_color, self.doc.settings.page_picture, self.doc.settings.watermark).hash(&mut h);
